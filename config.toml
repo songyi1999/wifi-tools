@@ -1,0 +1,34 @@
+# wifi-toolkit configuration
+# WPS / capture / pipeline all use `targets` as the SSID list.
+# Edit here or in the GUI (GUI has a scan-to-pick feature).
+
+[targets]
+# Target SSID list (supports partial matching, e.g. "tp3-204" matches "3--204")
+list = ["318", "tp3-204", "huawei-303"]
+
+[wps]
+# WPS PIN candidates (8 digits each)
+pins = ["12345670", "12345678"]
+timeout_sec = 20
+
+[scan]
+duration_sec = 90
+interval_sec = 4
+disconnect_first = true   # disconnect briefly during scan so more APs are visible
+
+[capture]
+duration_sec = 120        # airodump-ng duration per target
+interface = "WLAN"
+
+[crack]
+# aircrack-ng 1.7 Windows bin directory (Cygwin DLLs live here)
+acng_bin = "C:\\Users\\songyi\\.ssh\\wifi_crack\\acng_extracted\\aircrack-ng-1.7-win\\bin"
+# Wordlist; falls back to mini_dict.txt when rockyou.txt is missing
+dict = "C:\\Users\\songyi\\.ssh\\wifi_crack\\tools\\rockyou.txt"
+dict_fallback = "C:\\Users\\songyi\\.ssh\\wifi_crack\\tools\\mini_dict.txt"
+timeout_sec = 600
+
+[restore]
+# Reconnect target after pipeline ends; auto-detected from current connection at runtime
+# Leave empty = remember current network before run
+ssid = ""
