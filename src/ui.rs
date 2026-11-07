@@ -195,9 +195,13 @@ impl App {
             egui::ScrollArea::vertical().max_height(210.0).show(ui, |ui| {
                 egui::Grid::new("net_table").striped(true).min_col_width(60.0).show(ui, |ui| {
                     for n in &nets {
-                        ui.label(&n.ssid);
-                        ui.label(format!("ch{:?}", n.channel));
-                        ui.label(n.auth.as_deref().unwrap_or("?"));
+                        let display = if n.ssid == "(empty)" { "（隐藏网络）" } else { &n.ssid };
+                        ui.label(display);
+                        ui.label(match &n.channel {
+                            Some(c) => format!("频道 {}", c),
+                            None => "频道 未知".to_string(),
+                        });
+                        ui.label(n.auth.as_deref().unwrap_or("加密未知"));
                         let already = self.cfg.targets.list.contains(&n.ssid);
                         if already {
                             ui.label("✓");
@@ -329,11 +333,11 @@ impl App {
         if let Some(s) = &summary {
             ui.separator();
             ui.label(format!(
-                "上次全流程: {}s · 网络恢复: {} · 原 {:?} → 现 {:?}",
+                "上次全流程: {}s · 网络恢复: {} · 原 {} → 现 {}",
                 s.elapsed_sec,
                 if s.restored { "✓" } else { "✗" },
                 s.original_ssid,
-                s.final_ssid
+                s.final_ssid.as_deref().unwrap_or("(未连接)")
             ));
             if !s.wps_cracked.is_empty() {
                 ui.colored_label(egui::Color32::YELLOW, format!("WPS 破解: {:?}", s.wps_cracked));
@@ -463,7 +467,7 @@ impl App {
                                     "  {}: {}",
                                     r.cap,
                                     if r.cracked {
-                                        format!("CRACKED ✓ = {:?}", r.password)
+                                        format!("CRACKED ✓ = {}", r.password.as_deref().unwrap_or("(未知)"))
                                     } else {
                                         "未破解".into()
                                     }

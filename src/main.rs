@@ -108,12 +108,13 @@ fn run_nets() -> i32 {
         Ok(nets) => {
             println!("\n{} SSID(s):", nets.len());
             for n in &nets {
+                let ssid = if n.ssid == "(empty)" { "(隐藏网络)" } else { &n.ssid };
                 println!(
-                    "  {:28} bssid={:?} ch={:?} {}",
-                    n.ssid,
-                    n.bssid,
-                    n.channel,
-                    n.auth.as_deref().unwrap_or("")
+                    "  {:24} 频道={:<4} {}  bssid={}",
+                    ssid,
+                    n.channel.as_deref().unwrap_or("?"),
+                    n.auth.as_deref().unwrap_or(""),
+                    n.bssid.as_deref().unwrap_or("?")
                 );
             }
             if nets.len() <= 1 {
