@@ -17,7 +17,57 @@ pub struct ScanResult {
     pub networks: BTreeMap<String, netsh::NetworkInfo>,
 }
 
-/// Run scan. If `disconnect_first`, disconnect then reconnect afterwards via `restore_to`.
+/// Trigger an active scan (WlanScan), wait for the sweep, then read the refreshed list.
+/// This mirrors what Windows does when you open the WiFi flyout.
+pub fn flyout_refresh(wait_sec: u64) -> Result<Vec<netsh::NetworkInfo>> {
+    match crate::wlanapi::trigger_scan_all() {
+        Ok(n) => tracing::info!("scan: WlanScan triggered on {} interface(s)", n),
+        Err(e) => tracing::warn!("scan: WlanScan unavailable ({}); reading cached list", e),
+    }
+    std::thread::sleep(Duration::from_secs(wait_sec.max(2)));
+    netsh::show_networks()
+}
+
+/// Multi-round quick scan with active-scan triggers; accumulates unique SSIDs.
+/// Never disconnects — safe to run while connected.
+pub fn quick_scan(
+    rounds: u32,
+    interval: Duration,
+    tx: Option<&crate::pipeline::EventTx>,
+) -> Result<Vec<netsh::NetworkInfo>> {
+    let mut all: Vec<netsh::NetworkInfo> = Vec::new();
+    for r in 0..rounds {
+        if let Err(e) = crate::wlanapi::trigger_scan_all() {
+            tracing::warn!("scan: WlanScan trigger failed: {:#}", e);
+        }
+        std::thread::sleep(interval);
+        match netsh::show_networks() {
+            Ok(nets) => {
+                let before = all.len();
+                for n in nets {
+                    if !all.iter().any(|x| x.ssid == n.ssid) {
+                        all.push(n);
+                    }
+                }
+                let msg = format!(
+                    "quick-scan: round {}/{} -> +{} new (total {})",
+                    r + 1,
+                    rounds,
+                    all.len() - before,
+                    all.len()
+                );
+                tracing::info!("{}", msg);
+                if let Some(tx) = tx {
+                    let _ = tx.send(msg);
+                }
+            }
+            Err(e) => tracing::warn!("scan: round {}: {}", r + 1, e),
+        }
+    }
+    Ok(all)
+}
+
+/// Run deep scan. If `disconnect_first`, disconnect then reconnect afterwards via `restore_to`.
 pub fn scan(cfg: &ScanCfg, restore_to: Option<&str>) -> Result<ScanResult> {
     if cfg.disconnect_first {
         tracing::info!("scan: disconnecting for better visibility...");
@@ -31,6 +81,10 @@ pub fn scan(cfg: &ScanCfg, restore_to: Option<&str>) -> Result<ScanResult> {
     let interval = Duration::from_secs(cfg.interval_sec.max(1));
 
     while t0.elapsed().as_secs() < cfg.duration_sec {
+        // Trigger an active sweep every ~3 rounds so the cache keeps refreshing.
+        if rounds % 3 == 0 {
+            let _ = crate::wlanapi::trigger_scan_all();
+        }
         match netsh::show_networks() {
             Ok(nets) => {
                 for n in nets {

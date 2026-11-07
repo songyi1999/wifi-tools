@@ -9,6 +9,7 @@ mod pipeline;
 mod restore;
 mod scan;
 mod ui;
+mod wlanapi;
 mod wps;
 
 use clap::{Parser, Subcommand};
@@ -30,6 +31,8 @@ enum Command {
     Gui,
     /// Full pipeline unattended: scan -> wps -> capture -> crack -> restore
     Run,
+    /// Quick scan: trigger active scans + read refreshed list (never disconnects)
+    Nets,
     /// Multi-round scan (writes scan_results.json)
     Scan,
     /// WPS PIN probe against configured targets
@@ -61,6 +64,7 @@ fn main() {
     let code = match cli.command.unwrap_or(Command::Gui) {
         Command::Gui => run_gui(cfg),
         Command::Run => run_pipeline(cfg),
+        Command::Nets => run_nets(),
         Command::Scan => run_scan(cfg),
         Command::Wps => run_wps(cfg),
         Command::Capture => run_capture(cfg),
@@ -93,6 +97,34 @@ fn run_pipeline(cfg: config::Config) -> i32 {
         }
         Err(e) => {
             tracing::error!("pipeline failed: {:#}", e);
+            1
+        }
+    }
+}
+
+fn run_nets() -> i32 {
+    println!("quick scan: 4 rounds, WlanScan trigger each round (~15s, no disconnect)...");
+    match scan::quick_scan(4, std::time::Duration::from_secs(3), None) {
+        Ok(nets) => {
+            println!("\n{} SSID(s):", nets.len());
+            for n in &nets {
+                println!(
+                    "  {:28} bssid={:?} ch={:?} {}",
+                    n.ssid,
+                    n.bssid,
+                    n.channel,
+                    n.auth.as_deref().unwrap_or("")
+                );
+            }
+            if nets.len() <= 1 {
+                println!("\nNOTE: only the current AP visible — WlanScan trigger may have failed; check log warnings.");
+                2
+            } else {
+                0
+            }
+        }
+        Err(e) => {
+            tracing::error!("nets failed: {:#}", e);
             1
         }
     }

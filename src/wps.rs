@@ -96,7 +96,8 @@ pub fn probe(cfg: &WpsCfg, targets: &[String]) -> Result<WpsResults> {
 
     for target in targets {
         let mut tr = TargetResult::default();
-        let nets = netsh::show_networks()?;
+        // Active-scan refresh first: while connected the cached list is stale.
+        let nets = crate::scan::flyout_refresh(4)?;
         match find_match(target, &nets) {
             None => {
                 let visible: Vec<String> = nets.iter().map(|n| n.ssid.clone()).collect();

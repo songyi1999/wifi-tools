@@ -173,10 +173,10 @@ impl App {
             if btn.clicked() {
                 let networks_slot = self.networks.clone();
                 self.spawn("quick-scan", move |tx| {
-                    let _ = tx.send("调用 netsh 扫描（不影响当前连接）…".into());
-                    match netsh::show_networks() {
+                    let _ = tx.send("主动扫描 4 轮（每轮触发 WlanScan 全信道扫描，不断网）…".into());
+                    match crate::scan::quick_scan(4, Duration::from_secs(3), Some(&tx)) {
                         Ok(nets) => {
-                            let _ = tx.send(format!("发现 {} 个 SSID，在左侧勾选加入目标", nets.len()));
+                            let _ = tx.send(format!("扫描完成，共 {} 个 SSID，在左侧勾选加入目标", nets.len()));
                             *networks_slot.lock().unwrap() = Some(nets);
                         }
                         Err(e) => {
