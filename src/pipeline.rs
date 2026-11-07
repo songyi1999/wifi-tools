@@ -86,17 +86,25 @@ pub fn run_full(cfg: &Config, logs_dir: &Path, tx: Option<&EventTx>) -> Result<P
 
         // Step 4: crack
         emit(tx, "[step 4/5] offline crack ...");
-        if let Some(dict) = cfg.effective_dict() {
-            let crack_res =
-                crate::crack::crack_caps(&cfg.crack.acng_bin, &caps_dir, &dict, cfg.crack.timeout_sec)?;
+        let dicts = cfg.effective_dicts();
+        if !dicts.is_empty() || cfg.crack.use_patterns {
+            let crack_res = crate::crack::crack_caps(
+                &cfg.crack.acng_bin,
+                &caps_dir,
+                &cfg.crack,
+                &dicts,
+                tx,
+            )?;
             for r in &crack_res {
                 if r.cracked {
-                    summary.crack_found.push(format!("{}={}", r.cap, r.password.clone().unwrap_or_default()));
+                    summary
+                        .crack_found
+                        .push(format!("{}={}", r.cap, r.password.clone().unwrap_or_default()));
                 }
             }
             crate::crack::save_result(&crack_res, &logs_dir)?;
         } else {
-            emit(tx, "[step 4/5] no dictionary found — skipping crack");
+            emit(tx, "[step 4/5] no dictionaries found — skipping crack");
         }
         Ok(())
     })();

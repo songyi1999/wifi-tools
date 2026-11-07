@@ -23,10 +23,15 @@ interface = "WLAN"
 [crack]
 # aircrack-ng 1.7 Windows bin directory (Cygwin DLLs live here)
 acng_bin = "C:\\Users\\songyi\\.ssh\\wifi_crack\\acng_extracted\\aircrack-ng-1.7-win\\bin"
-# Wordlist; falls back to mini_dict.txt when rockyou.txt is missing
-dict = "C:\\Users\\songyi\\.ssh\\wifi_crack\\tools\\rockyou.txt"
+# Dictionaries: `dict` first (if present), then every *.txt|*.dic|*.lst in dicts_dir
+dict = "E:\\project\\wifi-toolkit\\dicts\\rockyou.txt"
+dicts_dir = "E:\\project\\wifi-toolkit\\dicts"
 dict_fallback = "C:\\Users\\songyi\\.ssh\\wifi_crack\\tools\\mini_dict.txt"
-timeout_sec = 600
+# Built-in pattern dictionary (common numerics / dates 1900-2026 / pinyin combos)
+use_patterns = true
+# Append the full 8-digit numeric space (100M candidates, ~10+ min per target)
+full8 = false
+timeout_sec = 1800
 
 [restore]
 # Reconnect target after pipeline ends; auto-detected from current connection at runtime

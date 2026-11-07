@@ -26,19 +26,37 @@ wifi-toolkit.exe           :: 或 wifi-toolkit.exe gui
 ```bat
 wifi-toolkit.exe run                :: 全流程（无人值守，结束自动恢复原网络）
 wifi-toolkit.exe scan               :: 多轮扫描（读 config.toml）
+wifi-toolkit.exe nets               :: 快速扫描（触发主动扫描，不断网）
 wifi-toolkit.exe wps                :: WPS PIN 探测
 wifi-toolkit.exe capture            :: airodump-ng 抓包
-wifi-toolkit.exe crack              :: aircrack-ng 离线爆破
+wifi-toolkit.exe crack              :: 爆破 logs\caps\ 下全部 .cap
+wifi-toolkit.exe crack <cap> <dict> :: 指定 cap 和字典；dict 为 - 时用内置模式字典
+wifi-toolkit.exe dict               :: 列出字典（行数/大小）
+wifi-toolkit.exe dict update        :: 下载 top100万 + rockyou 字典
 wifi-toolkit.exe reconnect <SSID>   :: 手动重连
 wifi-toolkit.exe export-passwords   :: 导出已保存 profile 密码表
 ```
+
+## 离线爆破
+
+词源按序尝试，命中即停：
+1. **内置模式字典**（stdin 流式喂给 aircrack，不占磁盘，约 5 万条）：
+   常用数字/重复序列 → 1900-2026 全部有效日期 → 拼音×数字后缀组合
+   （`full8 = true` 时追加全量 8 位数字 1 亿条，约 10 分钟+/目标）
+2. **字典文件**：`dict`（rockyou，1434 万条）→ `dicts_dir` 下全部 .txt/.dic/.lst → 兜底 mini_dict
+
+stdin 模式会先用 `aircrack-ng <cap>` 自动探测目标 BSSID（`-w -` 要求显式选网）。
+进度事件实时显示（每 10%），支持硬超时杀进程。
+
+验证：`dicts/test/wpa.cap` 是 aircrack-ng 官方测试包（密码 `biscotte`），
+`cargo test` 里的两个端到端测试用它回归文件字典和 stdin 两条链路。
 
 ## 配置（config.toml）
 
 - `[targets] list` — WPS / 抓包共用的 SSID 目标列表（支持部分匹配：`tp3-204` 可匹配 `3--204`）
 - `[wps] pins` — PIN 候选列表
 - `[scan] disconnect_first` — 扫描前短暂断网（能看到更多 AP）
-- `[crack] acng_bin / dict` — aircrack-ng 路径与字典
+- `[crack] dict / dicts_dir / use_patterns / full8` — 字典与爆破模式（见「离线爆破」）
 - `[restore] ssid` — 留空 = 运行前自动记住当前网络
 
 ## 日志

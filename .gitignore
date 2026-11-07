@@ -2,3 +2,7 @@
 logs
 *.cap
 config.local.toml
+# dictionaries are downloaded (rockyou 134MB etc.) — keep only the test vector
+dicts/*
+!dicts/test/
+!dicts/test/wpa.cap

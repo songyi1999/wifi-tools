@@ -293,6 +293,38 @@ impl App {
                 "扫描前短暂断网（能看到更多AP）",
             );
             ui.add_space(6.0);
+            ui.label("字典管理");
+            let dicts = self.cfg.effective_dicts();
+            let total_mb: f64 = dicts
+                .iter()
+                .filter_map(|p| std::fs::metadata(p).ok())
+                .map(|m| m.len() as f64 / 1024.0 / 1024.0)
+                .sum();
+            ui.label(format!(
+                "可用字典: {} 个，共 {:.1} MB{}",
+                dicts.len(),
+                total_mb,
+                if self.cfg.crack.use_patterns { "，+ 内置模式字典" } else { "" }
+            ));
+            ui.checkbox(&mut self.cfg.crack.use_patterns, "使用内置模式字典（日期/拼音/常用数字）");
+            ui.checkbox(&mut self.cfg.crack.full8, "追加全量8位数字（1亿个，耗时 10 分钟+/目标）");
+            ui.horizontal(|ui| {
+                let dl1 = ui.add_enabled(!busy, egui::Button::new("下载 top100万 (8.5MB)").small());
+                if dl1.clicked() {
+                    self.launch_dict_download("xato");
+                }
+                let dl2 = ui.add_enabled(!busy, egui::Button::new("下载 rockyou (134MB)").small());
+                if dl2.clicked() {
+                    self.launch_dict_download("rockyou");
+                }
+                if ui.small_button("打开目录").clicked() {
+                    let _ = std::process::Command::new("explorer")
+                        .arg(self.cfg.crack.dicts_dir.clone())
+                        .spawn();
+                }
+            });
+
+            ui.add_space(6.0);
             ui.label("aircrack 目录");
             ui.add(egui::TextEdit::singleline(&mut self.acng_bin_str).desired_width(ui.available_width()));
             ui.label("字典路径（rockyou 缺失时自动用 mini_dict）");
@@ -488,38 +520,82 @@ impl App {
         let cfg = self.cfg.clone();
         let logs_dir = config::ensure_logs_dir();
         self.spawn("crack", move |tx| {
-            match cfg.effective_dict() {
-                Some(dict) => {
-                    let caps_dir = crate::capture::caps_dir(&logs_dir);
-                    match crate::crack::crack_caps(
-                        &cfg.crack.acng_bin,
-                        &caps_dir,
-                        &dict,
-                        cfg.crack.timeout_sec,
-                    ) {
-                        Ok(res) => {
-                            for r in &res {
-                                let _ = tx.send(format!(
-                                    "  {}: {}",
-                                    r.cap,
-                                    if r.cracked {
-                                        format!("破解成功 = {}", r.password.as_deref().unwrap_or("(未知)"))
-                                    } else {
-                                        "未破解".into()
-                                    }
-                                ));
-                            }
-                            if let Err(e) = crate::crack::save_result(&res, &logs_dir) {
-                                let _ = tx.send(format!("保存结果失败: {:#}", e));
-                            }
-                        }
-                        Err(e) => {
-                            let _ = tx.send(format!("爆破失败: {:#}", e));
-                        }
+            let dicts = cfg.effective_dicts();
+            let _ = tx.send(format!(
+                "爆破：模式字典={}，字典文件 {} 个{}",
+                if cfg.crack.use_patterns { "开" } else { "关" },
+                dicts.len(),
+                if cfg.crack.full8 { "（含全量8位数字）" } else { "" }
+            ));
+            let caps_dir = crate::capture::caps_dir(&logs_dir);
+            match crate::crack::crack_caps(&cfg.crack.acng_bin, &caps_dir, &cfg.crack, &dicts, Some(&tx))
+            {
+                Ok(res) => {
+                    for r in &res {
+                        let _ = tx.send(format!(
+                            "  {}: {} ({})",
+                            r.cap,
+                            if r.cracked {
+                                format!("破解成功 = {}", r.password.as_deref().unwrap_or("(未知)"))
+                            } else {
+                                "未破解".into()
+                            },
+                            r.source.as_deref().unwrap_or("?")
+                        ));
+                    }
+                    if let Err(e) = crate::crack::save_result(&res, &logs_dir) {
+                        let _ = tx.send(format!("保存结果失败: {:#}", e));
                     }
                 }
-                None => {
-                    let _ = tx.send("找不到字典文件（rockyou / mini_dict 均缺失）".into());
+                Err(e) => {
+                    let _ = tx.send(format!("爆破失败: {:#}", e));
+                }
+            }
+        });
+    }
+
+    fn launch_dict_download(&mut self, which: &str) {
+        let cfg = self.cfg.clone();
+        let which = which.to_string();
+        let task = format!("dict-{}", which);
+        self.spawn(&task, move |tx| {
+            let dir = cfg.crack.dicts_dir.clone();
+            let _ = std::fs::create_dir_all(&dir);
+            let targets: Vec<(&str, &str, &str, u64)> = if which == "rockyou" {
+                vec![(
+                    "rockyou.txt",
+                    "https://github.com/brannondorsey/naive-hashcat/releases/download/data/rockyou.txt",
+                    "134MB",
+                    100_000_000,
+                )]
+            } else {
+                vec![
+                    ("xato100w.txt", "https://fastly.jsdelivr.net/gh/danielmiessler/SecLists@master/Passwords/Common-Credentials/xato-net-10-million-passwords-1000000.txt", "8.5MB", 1_000_000),
+                    ("xato100w.txt", "https://gcore.jsdelivr.net/gh/danielmiessler/SecLists@master/Passwords/Common-Credentials/xato-net-10-million-passwords-1000000.txt", "8.5MB", 1_000_000),
+                    ("xato100w.txt", "https://cdn.jsdelivr.net/gh/danielmiessler/SecLists@master/Passwords/Common-Credentials/xato-net-10-million-passwords-1000000.txt", "8.5MB", 1_000_000),
+                ]
+            };
+            for (name, url, size, min) in targets {
+                let dest = dir.join(name);
+                if dest.exists() {
+                    let _ = tx.send(format!("已存在，跳过: {}", name));
+                    continue;
+                }
+                let _ = tx.send(format!("下载 {} ({})…", name, size));
+                let st = std::process::Command::new("curl")
+                    .args(["-sfL", "--retry", "2", "--max-time", "1800", "-o"])
+                    .arg(&dest)
+                    .arg(url)
+                    .status();
+                match st {
+                    Ok(s) if s.success() && dest.metadata().map(|m| m.len() >= min).unwrap_or(false) => {
+                        let _ = tx.send(format!("下载完成: {}", name));
+                        break;
+                    }
+                    _ => {
+                        let _ = tx.send(format!("该源失败，尝试下一个镜像…"));
+                        let _ = std::fs::remove_file(&dest);
+                    }
                 }
             }
         });

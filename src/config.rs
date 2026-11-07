@@ -100,10 +100,21 @@ impl Default for CaptureCfg {
 pub struct CrackCfg {
     #[serde(default = "default_acng_bin")]
     pub acng_bin: PathBuf,
+    /// Primary dictionary (checked first if it exists)
     #[serde(default = "default_dict")]
     pub dict: PathBuf,
+    /// Extra dictionaries: every *.txt|*.dic|*.lst in this directory
+    #[serde(default = "default_dicts_dir")]
+    pub dicts_dir: PathBuf,
+    /// Legacy fallback (mini_dict)
     #[serde(default = "default_dict_fallback")]
     pub dict_fallback: PathBuf,
+    /// Use the built-in pattern dictionary (dates/pinyin/common) via stdin
+    #[serde(default = "default_use_patterns")]
+    pub use_patterns: bool,
+    /// Include the full 8-digit numeric space (100M candidates, slow)
+    #[serde(default = "default_full8")]
+    pub full8: bool,
     #[serde(default = "default_crack_timeout")]
     pub timeout_sec: u64,
 }
@@ -112,13 +123,22 @@ fn default_acng_bin() -> PathBuf {
     PathBuf::from(r"C:\Users\songyi\.ssh\wifi_crack\acng_extracted\aircrack-ng-1.7-win\bin")
 }
 fn default_dict() -> PathBuf {
-    PathBuf::from(r"C:\Users\songyi\.ssh\wifi_crack\tools\rockyou.txt")
+    PathBuf::from(r"E:\project\wifi-toolkit\dicts\rockyou.txt")
+}
+fn default_dicts_dir() -> PathBuf {
+    PathBuf::from(r"E:\project\wifi-toolkit\dicts")
 }
 fn default_dict_fallback() -> PathBuf {
     PathBuf::from(r"C:\Users\songyi\.ssh\wifi_crack\tools\mini_dict.txt")
 }
+fn default_use_patterns() -> bool {
+    true
+}
+fn default_full8() -> bool {
+    false
+}
 fn default_crack_timeout() -> u64 {
-    600
+    1800
 }
 
 impl Default for CrackCfg {
@@ -126,7 +146,10 @@ impl Default for CrackCfg {
         Self {
             acng_bin: default_acng_bin(),
             dict: default_dict(),
+            dicts_dir: default_dicts_dir(),
             dict_fallback: default_dict_fallback(),
+            use_patterns: default_use_patterns(),
+            full8: default_full8(),
             timeout_sec: default_crack_timeout(),
         }
     }
@@ -175,27 +198,44 @@ impl Default for Config {
                 duration_sec: default_capture_duration(),
                 interface: default_interface(),
             },
-            crack: CrackCfg {
-                acng_bin: default_acng_bin(),
-                dict: default_dict(),
-                dict_fallback: default_dict_fallback(),
-                timeout_sec: default_crack_timeout(),
-            },
+            crack: CrackCfg::default(),
             restore: RestoreCfg { ssid: String::new() },
         }
     }
 }
 
 impl Config {
-    /// Resolve the effective wordlist: dict if exists else dict_fallback.
-    pub fn effective_dict(&self) -> Option<PathBuf> {
+    /// All usable dictionaries in try order: primary dict, then every
+    /// *.txt|*.dic|*.lst in dicts_dir (sorted), then the legacy fallback.
+    pub fn effective_dicts(&self) -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = Vec::new();
         if self.crack.dict.exists() {
-            Some(self.crack.dict.clone())
-        } else if self.crack.dict_fallback.exists() {
-            Some(self.crack.dict_fallback.clone())
-        } else {
-            None
+            out.push(self.crack.dict.clone());
         }
+        if self.crack.dicts_dir.exists() {
+            let mut files: Vec<PathBuf> = std::fs::read_dir(&self.crack.dicts_dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    matches!(
+                        p.extension().and_then(|e| e.to_str()),
+                        Some("txt") | Some("dic") | Some("lst")
+                    )
+                })
+                .collect();
+            files.sort();
+            for f in files {
+                if !out.contains(&f) {
+                    out.push(f);
+                }
+            }
+        }
+        if self.crack.dict_fallback.exists() && !out.contains(&self.crack.dict_fallback) {
+            out.push(self.crack.dict_fallback.clone());
+        }
+        out
     }
 }
 
