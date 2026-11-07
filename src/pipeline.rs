@@ -23,11 +23,9 @@ pub struct PipelineSummary {
 /// Events a worker can emit (used by the GUI to show live progress).
 pub type EventTx = std::sync::mpsc::Sender<String>;
 
-pub fn emit(tx: Option<&EventTx>, msg: &str) {
+pub fn emit(_tx: Option<&EventTx>, msg: &str) {
+    // The web UI receives everything through the tracing mirror layer.
     tracing::info!("{}", msg);
-    if let Some(tx) = tx {
-        let _ = tx.send(msg.to_string());
-    }
 }
 
 /// Run the full pipeline. `logs_dir` receives all JSON results.

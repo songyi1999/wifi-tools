@@ -94,7 +94,7 @@ fn run_aircrack(
     cap: &Path,
     dict_arg: &Path,
     candidates: Option<Box<dyn Iterator<Item = String> + Send>>,
-    tx: Option<&EventTx>,
+    _tx: Option<&EventTx>,
     timeout: Duration,
 ) -> Result<String> {
     let exe = acng_bin.join("aircrack-ng.exe");
@@ -140,11 +140,10 @@ fn run_aircrack(
 
     // stdout reader: collect text + forward progress events
     let stdout = child.stdout.take().expect("stdout piped");
-    let tx_out = tx.cloned();
-    let reader_out = std::thread::spawn(move || collect_output(stdout, tx_out));
+    let reader_out = std::thread::spawn(move || collect_output(stdout));
     // stderr reader: collect error text
     let stderr = child.stderr.take().expect("stderr piped");
-    let reader_err = std::thread::spawn(move || collect_output(stderr, None));
+    let reader_err = std::thread::spawn(move || collect_output(stderr));
 
     // timeout enforcement
     let start = Instant::now();
@@ -178,7 +177,7 @@ fn run_aircrack(
 
 /// Read a child stream, splitting on \r and \n (aircrack redraws progress with \r),
 /// forwarding "N/M keys tested" percentages as events.
-fn collect_output<R: Read + Send + 'static>(mut r: R, tx: Option<EventTx>) -> String {
+fn collect_output<R: Read + Send + 'static>(mut r: R) -> String {
     let mut text = String::new();
     let mut last_percent_step = 0u32;
     let mut buf = Vec::new();
@@ -195,7 +194,7 @@ fn collect_output<R: Read + Send + 'static>(mut r: R, tx: Option<EventTx>) -> St
             let seg = String::from_utf8_lossy(&seg_bytes[..pos]);
             text.push_str(&seg);
             text.push('\n');
-            if let Some(tx) = &tx {
+            {
                 if seg.contains("keys tested") {
                     if let Some(c) = regex::Regex::new(r"\]\s*(\d+)/(\d+)")
                         .ok()
@@ -206,7 +205,7 @@ fn collect_output<R: Read + Send + 'static>(mut r: R, tx: Option<EventTx>) -> St
                         let percent = (done * 100 / total.max(1)) as u32;
                         if percent / 10 > last_percent_step {
                             last_percent_step = percent / 10;
-                            let _ = tx.send(format!("crack 进度: {}% ({}/{})", percent, done, total));
+                            tracing::info!("crack 进度: {}% ({}/{})", percent, done, total);
                         }
                     }
                 }
@@ -332,25 +331,23 @@ pub fn crack_one_patterns(
     acng_bin: &Path,
     cap: &Path,
     full8: bool,
-    tx: Option<&EventTx>,
+    _tx: Option<&EventTx>,
     timeout: Duration,
 ) -> Result<CrackResult> {
     let name = cap.file_name().unwrap_or_default().to_string_lossy().to_string();
     let src = if full8 { "patterns+full8" } else { "patterns" };
     tracing::info!("crack: aircrack-ng -a 2 -w - (stdin: {}) {}", src, name);
-    if let Some(tx) = tx {
-        let _ = tx.send(if full8 {
-            "crack: 模式字典（含全量8位数字 1 亿，耗时较长）…".into()
-        } else {
-            "crack: 模式字典（常用数字/日期/拼音，约 5 万）…".into()
-        });
+    if full8 {
+        tracing::info!("crack: 模式字典（含全量8位数字 1 亿，耗时较长）…");
+    } else {
+        tracing::info!("crack: 模式字典（常用数字/日期/拼音，约 5 万）…");
     }
     let text = run_aircrack(
         acng_bin,
         cap,
         Path::new("-"),
         Some(pattern_candidates(full8)),
-        tx,
+        None,
         timeout,
     )?;
     Ok(result_from(&name, &text, src))
@@ -362,7 +359,7 @@ pub fn crack_caps(
     caps_dir: &Path,
     cfg: &CrackCfg,
     dicts: &[PathBuf],
-    tx: Option<&EventTx>,
+    _tx: Option<&EventTx>,
 ) -> Result<Vec<CrackResult>> {
     let mut caps: Vec<PathBuf> = Vec::new();
     if caps_dir.exists() {
@@ -394,7 +391,7 @@ pub fn crack_caps(
         let mut done: Option<CrackResult> = None;
 
         if cfg.use_patterns {
-            match crack_one_patterns(acng_bin, cap, cfg.full8, tx, timeout) {
+            match crack_one_patterns(acng_bin, cap, cfg.full8, None, timeout) {
                 Ok(r) if r.cracked => done = Some(r),
                 Ok(_) => {}
                 Err(e) => tracing::warn!("crack: patterns on {}: {}", name, e),
@@ -411,9 +408,7 @@ pub fn crack_caps(
                     Err(e) => {
                         tracing::warn!("crack: {} with {}: {}", name, dict.display(), e);
                         if e.to_string().contains("TIMEOUT") {
-                            if let Some(tx) = tx {
-                                let _ = tx.send(format!("crack: {} 超时，跳过 {}", dict.display(), name));
-                            }
+                            tracing::info!("crack: {} 超时，跳过 {}", dict.display(), name);
                             continue;
                         }
                     }

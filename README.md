@@ -1,7 +1,7 @@
 # wifi-toolkit
 
 纯 Rust 实现的 WiFi 工具箱：扫描 → WPS PIN 探测 → airodump 抓包 → aircrack-ng 离线爆破 → 自动恢复网络。
-GUI（egui）+ CLI 双模式，完整日志。
+GUI（WebView2 webview）+ CLI 双模式，完整日志。
 
 > 仅供授权的安全测试 / 自有网络管理使用。
 
@@ -15,12 +15,15 @@ cargo build --release
 
 ## 使用
 
-### GUI（默认）
+### GUI（webview）
 ```bat
 wifi-toolkit.exe           :: 或 wifi-toolkit.exe gui
 ```
-- 左栏：SSID 目标列表（手输 + 「扫描网卡」列出附近 AP 后一键加入）、PIN 列表、时长、路径
-- 右栏：执行按钮（扫描 / WPS / 抓包 / 爆破 / ▶ 全流程）+ 实时日志 + 连接状态
+- WebView2 窗口加载 axum 本地页面（127.0.0.1 随机端口），无 GPU 兼容性问题
+- 左栏：目标 SSID 列表（文本编辑 + 「扫描网卡」4 轮主动扫描后一键加入）、PIN 列表、时长、字典管理
+- 右栏：执行按钮（深度扫描 / WPS / 抓包 / 爆破 / 导出密码 / ▶全流程）+ 实时日志 + 上次全流程结果
+- 若 WebView2 不可用，程序会打印 URL 并保持服务运行——用任意浏览器打开同一地址即可
+- 全部 tracing 日志通过 mirror 层实时进入页面日志区
 
 ### CLI
 ```bat

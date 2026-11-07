@@ -44,7 +44,7 @@ fn upsert_strongest(all: &mut Vec<netsh::NetworkInfo>, n: netsh::NetworkInfo) {
 pub fn quick_scan(
     rounds: u32,
     interval: Duration,
-    tx: Option<&crate::pipeline::EventTx>,
+    _tx: Option<&crate::pipeline::EventTx>,
 ) -> Result<Vec<netsh::NetworkInfo>> {
     let mut all: Vec<netsh::NetworkInfo> = Vec::new();
     for r in 0..rounds {
@@ -66,9 +66,6 @@ pub fn quick_scan(
                     all.len()
                 );
                 tracing::info!("{}", msg);
-                if let Some(tx) = tx {
-                    let _ = tx.send(msg);
-                }
             }
             Err(e) => tracing::warn!("scan: round {}: {}", r + 1, e),
         }

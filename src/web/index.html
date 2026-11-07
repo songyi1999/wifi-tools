@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WiFi Toolkit</title>
+<style>
+  :root { --bd:#d9dce1; --bg:#f5f6f8; --card:#fff; --tx:#23262b; --mut:#7a8088; --grn:#1e7c3a; --red:#c23a3a; --org:#b07d18; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.6 "Microsoft YaHei",system-ui,sans-serif; color:var(--tx); background:var(--bg); }
+  header { display:flex; align-items:center; gap:16px; padding:10px 16px; background:var(--card); border-bottom:1px solid var(--bd); position:sticky; top:0; z-index:5; }
+  header b { font-size:16px; }
+  .pill { padding:2px 10px; border-radius:12px; font-size:12px; background:#eef1f4; }
+  .pill.ok { background:#e2f3e6; color:var(--grn); }
+  .pill.busy { background:#fdeeea; color:var(--red); }
+  main { display:flex; gap:14px; padding:14px; align-items:flex-start; }
+  .col { background:var(--card); border:1px solid var(--bd); border-radius:8px; padding:12px 14px; }
+  .left { width:460px; flex:none; }
+  .right { flex:1; min-width:0; }
+  h2 { font-size:14px; margin:4px 0 8px; }
+  hr { border:none; border-top:1px solid var(--bd); margin:12px 0; }
+  textarea { width:100%; font:13px/1.5 Consolas,monospace; border:1px solid var(--bd); border-radius:6px; padding:6px 8px; resize:vertical; }
+  input[type=text], input[type=number] { border:1px solid var(--bd); border-radius:6px; padding:4px 8px; font-size:13px; }
+  button { border:1px solid var(--bd); background:#fff; border-radius:6px; padding:5px 12px; cursor:pointer; font-size:13px; }
+  button:hover:not(:disabled) { background:#f0f3f6; }
+  button:disabled { opacity:.45; cursor:default; }
+  button.primary { background:var(--grn); border-color:var(--grn); color:#fff; }
+  button.min { padding:2px 8px; font-size:12px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:4px 6px; border-bottom:1px solid #eef0f3; white-space:nowrap; }
+  th { color:var(--mut); font-weight:600; }
+  .sig { font-family:Consolas,monospace; font-weight:600; }
+  .g { color:var(--grn); } .y { color:var(--org); } .r { color:var(--red); }
+  #log { height:380px; overflow-y:auto; background:#1b1e23; color:#c9d1d9; font:12px/1.55 Consolas,monospace; border-radius:6px; padding:8px 10px; white-space:pre-wrap; word-break:break-all; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:6px 0; }
+  .kv { color:var(--mut); }
+  details summary { cursor:pointer; color:var(--mut); }
+  .field { margin:6px 0; }
+  .field label { display:block; font-size:12px; color:var(--mut); margin-bottom:2px; }
+  .field input[type=text] { width:100%; }
+  #summary { margin:6px 0; }
+  .okmark { color:var(--grn); font-weight:700; }
+  .badmark { color:var(--red); font-weight:700; }
+</style>
+</head>
+<body>
+<header>
+  <b>WiFi Toolkit</b>
+  <span id="conn" class="pill">读取中…</span>
+  <span id="busy" class="pill">空闲</span>
+  <span style="flex:1"></span>
+  <button class="min" onclick="refreshIface()">刷新状态</button>
+</header>
+<main>
+  <div class="col left">
+    <h2>目标 SSID 列表（每行一个，WPS / 抓包共用）</h2>
+    <textarea id="targets" rows="5" spellcheck="false"></textarea>
+    <hr>
+    <h2>扫描附近网络（不断网）</h2>
+    <div class="row">
+      <button data-task="quick_scan">扫描网卡（4 轮主动扫描）</button>
+      <span class="kv">结果按信号强度排序</span>
+    </div>
+    <div id="netwrap"></div>
+    <hr>
+    <h2>高级设置</h2>
+    <details open>
+      <div class="field"><label>WPS PIN 列表（每行一个）</label><textarea id="pins" rows="3" spellcheck="false"></textarea></div>
+      <div class="row">
+        <span>扫描时长 <input id="scan_sec" type="number" style="width:64px"> s</span>
+        <span>抓包时长 <input id="cap_sec" type="number" style="width:64px"> s</span>
+        <label><input id="disconnect_first" type="checkbox"> 深度扫描前断网</label>
+      </div>
+      <div class="row">
+        <label><input id="use_patterns" type="checkbox"> 模式字典</label>
+        <label><input id="full8" type="checkbox"> 全量8位数字（1亿，慢）</label>
+      </div>
+      <div class="field"><label>aircrack 目录</label><input id="acng_bin" type="text"></div>
+      <div class="field"><label>主字典（不存在时自动跳过）</label><input id="dict" type="text"></div>
+      <div class="field"><label>字典目录（.txt/.dic/.lst 全部参与爆破）</label><input id="dicts_dir" type="text"></div>
+      <div class="field"><label>恢复目标 SSID（留空=自动记住当前网络）</label><input id="restore_ssid" type="text"></div>
+      <div class="row">
+        <button class="primary" onclick="saveConfig()">保存配置</button>
+        <span id="savehint" class="kv"></span>
+      </div>
+      <hr>
+      <div class="row">
+        <button data-task="dict_xato">下载 top100万 (8.5MB)</button>
+        <button data-task="dict_rockyou">下载 rockyou (134MB)</button>
+      </div>
+    </details>
+  </div>
+  <div class="col right">
+    <h2>执行</h2>
+    <div class="row">
+      <button data-task="scan">深度扫描</button>
+      <button data-task="wps">WPS 探测</button>
+      <button data-task="capture">抓包</button>
+      <button data-task="crack">爆破</button>
+      <button data-task="export">导出密码</button>
+      <button data-task="full" class="primary">运行全流程</button>
+    </div>
+    <div id="summary"></div>
+    <hr>
+    <h2>执行日志</h2>
+    <div id="log"></div>
+  </div>
+</main>
+<script>
+let last = 0, cfg = null, busyName = null, nets = null;
+
+const $ = id => document.getElementById(id);
+const jget = async u => (await fetch(u)).json();
+const jpost = async (u, b) => {
+  const r = await fetch(u, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(b||{}) });
+  if (!r.ok) throw new Error((await r.json().catch(()=>({}))).message || r.status);
+  return r.json();
+};
+
+function loadForm(c) {
+  $('targets').value = (c.targets.list || []).join('\n');
+  $('pins').value = (c.wps.pins || []).join('\n');
+  $('scan_sec').value = c.scan.duration_sec;
+  $('cap_sec').value = c.capture.duration_sec;
+  $('disconnect_first').checked = !!c.scan.disconnect_first;
+  $('use_patterns').checked = !!c.crack.use_patterns;
+  $('full8').checked = !!c.crack.full8;
+  $('acng_bin').value = c.crack.acng_bin;
+  $('dict').value = c.crack.dict;
+  $('dicts_dir').value = c.crack.dicts_dir;
+  $('restore_ssid').value = c.restore.ssid || '';
+}
+function readForm() {
+  const c = JSON.parse(JSON.stringify(cfg));
+  c.targets.list = $('targets').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  c.wps.pins = $('pins').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  c.scan.duration_sec = +$('scan_sec').value || c.scan.duration_sec;
+  c.capture.duration_sec = +$('cap_sec').value || c.capture.duration_sec;
+  c.scan.disconnect_first = $('disconnect_first').checked;
+  c.crack.use_patterns = $('use_patterns').checked;
+  c.crack.full8 = $('full8').checked;
+  c.crack.acng_bin = $('acng_bin').value.trim();
+  c.crack.dict = $('dict').value.trim();
+  c.crack.dicts_dir = $('dicts_dir').value.trim();
+  c.restore.ssid = $('restore_ssid').value.trim();
+  return c;
+}
+async function saveConfig() {
+  try {
+    await jpost('/api/config', readForm());
+    $('savehint').textContent = '已保存';
+    setTimeout(()=>$('savehint').textContent='', 2500);
+  } catch (e) { $('savehint').textContent = '保存失败: ' + e.message; }
+}
+
+function renderNets() {
+  if (!nets) { $('netwrap').innerHTML = '<span class="kv">（尚未扫描）</span>'; return; }
+  const targets = new Set($('targets').value.split('\n').map(s=>s.trim()).filter(Boolean));
+  let rows = '';
+  for (const n of nets) {
+    const name = n.ssid === '(empty)' ? '（隐藏网络）' : n.ssid;
+    const sig = n.signal;
+    let sigHtml = '<span class="kv">未知</span>';
+    if (sig != null) {
+      const cls = sig >= 70 ? 'g' : (sig >= 40 ? 'y' : 'r');
+      const bars = sig >= 70 ? '■■■■' : (sig >= 40 ? '■■□□' : '■□□□');
+      sigHtml = `<span class="sig ${cls}">${bars} ${sig}%</span>`;
+    }
+    const inTargets = targets.has(n.ssid);
+    rows += `<tr><td>${name}</td><td>${n.channel ?? '未知'}</td><td>${sigHtml}</td><td>${n.auth ?? '加密未知'}</td>` +
+      `<td>${inTargets ? '<span class="okmark">已加</span>' : `<button class="min" onclick="addTarget('${n.ssid.replace(/'/g,"\\'")}')">+加入</button>`}</td></tr>`;
+  }
+  $('netwrap').innerHTML = `<table><tr><th>SSID</th><th>频道</th><th>信号</th><th>加密</th><th></th></tr>${rows}</table>`;
+}
+function addTarget(ssid) {
+  const list = $('targets').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  if (!list.includes(ssid)) list.push(ssid);
+  $('targets').value = list.join('\n');
+  renderNets();
+}
+
+function setBusy(name) {
+  busyName = name;
+  document.querySelectorAll('[data-task]').forEach(b => b.disabled = !!name);
+  const p = $('busy');
+  if (name) { p.textContent = '运行中: ' + name; p.className = 'pill busy'; }
+  else { p.textContent = '空闲'; p.className = 'pill'; }
+}
+function renderSummary(s) {
+  if (!s) { $('summary').innerHTML = ''; return; }
+  $('summary').innerHTML = `上次全流程: ${s.elapsed_sec}s · 网络恢复: ` +
+    (s.restored ? '<span class="okmark">是</span>' : '<span class="badmark">否</span>') +
+    ` · 原 ${s.original_ssid} → 现 ${s.final_ssid ?? '(未连接)'}` +
+    (s.wps_cracked?.length ? ` · WPS 破解: ${s.wps_cracked.join(',')}` : '') +
+    (s.crack_found?.length ? ` · 字典破解: ${s.crack_found.join(',')}` : '');
+}
+function pushLog(lines) {
+  if (!lines.length) return;
+  const el = $('log');
+  const stick = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
+  el.textContent += (el.textContent ? '\n' : '') + lines.join('\n');
+  while (el.textContent.split('\n').length > 3000) el.textContent = el.textContent.split('\n').slice(1000).join('\n');
+  if (stick) el.scrollTop = el.scrollHeight;
+}
+
+async function pollEvents() {
+  try {
+    const d = await jget('/api/events?since=' + last);
+    last = d.last; pushLog(d.events);
+  } catch {}
+}
+async function pollState() {
+  try {
+    const d = await jget('/api/state');
+    if (!cfg && d.config) { cfg = d.config; loadForm(cfg); }
+    setBusy(d.busy || null);
+    const i = d.iface;
+    const c = $('conn');
+    if (i) {
+      c.textContent = `当前连接: ${i.ssid ?? '(未连接)'} ${i.state ?? ''}`;
+      c.className = 'pill' + (i.ssid ? ' ok' : '');
+    }
+    renderSummary(d.summary);
+    const n = await jget('/api/networks');
+    if (JSON.stringify(n.networks) !== JSON.stringify(nets)) { nets = n.networks; renderNets(); }
+  } catch {}
+}
+async function refreshIface() {
+  try { const d = await jget('/api/events?since=' + last); last = d.last; pushLog(d.events); } catch {}
+  pollState();
+}
+
+document.querySelectorAll('[data-task]').forEach(b => {
+  b.addEventListener('click', async () => {
+    const t = b.dataset.task;
+    if (t === 'full' && !confirm('全流程会短暂断网扫描（结束自动恢复当前网络），继续？')) return;
+    try { await jpost('/api/task', { task: t }); } catch (e) { pushLog(['[错误] ' + e.message]); }
+  });
+});
+
+pollEvents(); pollState();
+setInterval(pollEvents, 700);
+setInterval(pollState, 2000);
+</script>
+</body>
+</html>

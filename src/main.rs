@@ -3,12 +3,13 @@
 mod capture;
 mod config;
 mod crack;
+mod events;
 mod logging;
 mod netsh;
 mod pipeline;
 mod restore;
 mod scan;
-mod ui;
+mod web;
 mod wlanapi;
 mod wps;
 
@@ -80,7 +81,7 @@ fn main() {
 }
 
 fn run_gui(cfg: config::Config) -> i32 {
-    match ui::start(cfg) {
+    match web::start(cfg) {
         Ok(()) => 0,
         Err(e) => {
             tracing::error!("GUI failed: {:#}", e);
