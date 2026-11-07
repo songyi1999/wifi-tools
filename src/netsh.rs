@@ -78,6 +78,7 @@ pub struct NetworkInfo {
     pub ssid: String,
     pub bssid: Option<String>,
     pub channel: Option<String>,
+    pub signal: Option<u32>,
     pub auth: Option<String>,
 }
 
@@ -92,6 +93,8 @@ pub fn parse_networks(txt: &str) -> Result<Vec<NetworkInfo>> {
     let bssid_re = Regex::new(r"BSSID 1\s*:\s*([0-9a-fA-F:]+)").unwrap();
     let chan_re = Regex::new(r"频道\s*:\s*(\d+)").unwrap();
     let chan_re_en = Regex::new(r"Channel\s*:\s*(\d+)").unwrap();
+    let sig_re = Regex::new(r"信号\s*:\s*(\d+)%").unwrap();
+    let sig_re_en = Regex::new(r"Signal\s*:\s*(\d+)%").unwrap();
     let auth_re = Regex::new(r"身份验证\s*:\s*(.+)").unwrap();
     let auth_re_en = Regex::new(r"Authentication\s*:\s*(.+)").unwrap();
 
@@ -117,6 +120,10 @@ pub fn parse_networks(txt: &str) -> Result<Vec<NetworkInfo>> {
             .captures(body)
             .or_else(|| chan_re_en.captures(body))
             .map(|c| c[1].to_string());
+        let signal = sig_re
+            .captures(body)
+            .or_else(|| sig_re_en.captures(body))
+            .and_then(|c| c[1].parse::<u32>().ok());
         let auth = auth_re
             .captures(body)
             .or_else(|| auth_re_en.captures(body))
@@ -125,6 +132,7 @@ pub fn parse_networks(txt: &str) -> Result<Vec<NetworkInfo>> {
             ssid: key,
             bssid: bssid_re.captures(body).map(|c| c[1].to_lowercase()),
             channel,
+            signal,
             auth,
         });
     }

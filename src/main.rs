@@ -106,12 +106,15 @@ fn run_nets() -> i32 {
     println!("quick scan: 4 rounds, WlanScan trigger each round (~15s, no disconnect)...");
     match scan::quick_scan(4, std::time::Duration::from_secs(3), None) {
         Ok(nets) => {
-            println!("\n{} SSID(s):", nets.len());
+            let mut nets = nets;
+            nets.sort_by_key(|n| std::cmp::Reverse(n.signal.unwrap_or(0)));
+            println!("\n{} SSID(s)（按信号强度排序）:", nets.len());
             for n in &nets {
                 let ssid = if n.ssid == "(empty)" { "(隐藏网络)" } else { &n.ssid };
                 println!(
-                    "  {:24} 频道={:<4} {}  bssid={}",
+                    "  {:24} 信号={:<4} 频道={:<4} {}  bssid={}",
                     ssid,
+                    n.signal.map(|s| format!("{}%", s)).unwrap_or_else(|| "?".into()),
                     n.channel.as_deref().unwrap_or("?"),
                     n.auth.as_deref().unwrap_or(""),
                     n.bssid.as_deref().unwrap_or("?")

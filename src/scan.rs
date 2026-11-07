@@ -28,6 +28,17 @@ pub fn flyout_refresh(wait_sec: u64) -> Result<Vec<netsh::NetworkInfo>> {
     netsh::show_networks()
 }
 
+/// Insert or strengthen: keep the entry with the highest observed signal.
+fn upsert_strongest(all: &mut Vec<netsh::NetworkInfo>, n: netsh::NetworkInfo) {
+    if let Some(old) = all.iter_mut().find(|x| x.ssid == n.ssid) {
+        if n.signal.unwrap_or(0) > old.signal.unwrap_or(0) {
+            *old = n;
+        }
+        return;
+    }
+    all.push(n);
+}
+
 /// Multi-round quick scan with active-scan triggers; accumulates unique SSIDs.
 /// Never disconnects — safe to run while connected.
 pub fn quick_scan(
@@ -45,9 +56,7 @@ pub fn quick_scan(
             Ok(nets) => {
                 let before = all.len();
                 for n in nets {
-                    if !all.iter().any(|x| x.ssid == n.ssid) {
-                        all.push(n);
-                    }
+                    upsert_strongest(&mut all, n);
                 }
                 let msg = format!(
                     "quick-scan: round {}/{} -> +{} new (total {})",
@@ -88,7 +97,17 @@ pub fn scan(cfg: &ScanCfg, restore_to: Option<&str>) -> Result<ScanResult> {
         match netsh::show_networks() {
             Ok(nets) => {
                 for n in nets {
-                    seen.entry(n.ssid.clone()).or_insert(n);
+                    // Keep the strongest observation per SSID
+                    match seen.get_mut(&n.ssid) {
+                        Some(old) => {
+                            if n.signal.unwrap_or(0) > old.signal.unwrap_or(0) {
+                                *old = n;
+                            }
+                        }
+                        None => {
+                            seen.insert(n.ssid.clone(), n);
+                        }
+                    }
                 }
             }
             Err(e) => tracing::warn!("scan round {}: {}", rounds + 1, e),

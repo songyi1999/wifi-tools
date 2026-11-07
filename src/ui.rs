@@ -190,17 +190,53 @@ impl App {
             }
         });
 
-        let nets_opt = self.networks.lock().unwrap().clone();
+        let mut nets_opt = self.networks.lock().unwrap().clone();
+        if let Some(nets) = nets_opt.as_mut() {
+            // Strongest first; unknown signal last
+            nets.sort_by_key(|n| std::cmp::Reverse(n.signal.unwrap_or(0)));
+        }
         if let Some(nets) = nets_opt {
             egui::ScrollArea::vertical().max_height(210.0).show(ui, |ui| {
                 egui::Grid::new("net_table").striped(true).min_col_width(60.0).show(ui, |ui| {
+                    ui.strong("SSID");
+                    ui.strong("频道");
+                    ui.strong("信号");
+                    ui.strong("加密");
+                    ui.strong("");
+                    ui.end_row();
                     for n in &nets {
                         let display = if n.ssid == "(empty)" { "（隐藏网络）" } else { &n.ssid };
                         ui.label(display);
                         ui.label(match &n.channel {
-                            Some(c) => format!("频道 {}", c),
-                            None => "频道 未知".to_string(),
+                            Some(c) => format!("{}", c),
+                            None => "未知".to_string(),
                         });
+                        match n.signal {
+                            Some(sig) => {
+                                let color = if sig >= 70 {
+                                    egui::Color32::from_rgb(80, 200, 80)
+                                } else if sig >= 40 {
+                                    egui::Color32::from_rgb(230, 180, 60)
+                                } else {
+                                    egui::Color32::from_rgb(230, 90, 70)
+                                };
+                                let bars = if sig >= 70 {
+                                    "■■■■"
+                                } else if sig >= 40 {
+                                    "■■□□"
+                                } else {
+                                    "■□□□"
+                                };
+                                ui.label(
+                                    egui::RichText::new(format!("{} {}%", bars, sig)).color(color),
+                                );
+                            }
+                            None => {
+                                ui.label(
+                                    egui::RichText::new("未知").color(egui::Color32::GRAY),
+                                );
+                            }
+                        }
                         ui.label(n.auth.as_deref().unwrap_or("加密未知"));
                         let already = self.cfg.targets.list.contains(&n.ssid);
                         if already {
