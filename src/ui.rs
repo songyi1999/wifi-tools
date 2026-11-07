@@ -138,7 +138,7 @@ impl App {
                         egui::TextEdit::singleline(t)
                             .desired_width(ui.available_width() - 34.0),
                     );
-                    if ui.add_enabled(!busy, egui::Button::new("✕").small()).clicked() {
+                    if ui.add_enabled(!busy, egui::Button::new("删除").small()).clicked() {
                         remove_idx = Some(i);
                     }
                 });
@@ -167,7 +167,7 @@ impl App {
         });
 
         ui.separator();
-        ui.heading("📡 扫描附近网络");
+        ui.heading("扫描附近网络");
         ui.horizontal(|ui| {
             let btn = ui.add_enabled(!busy, egui::Button::new("扫描网卡（不断网）"));
             if btn.clicked() {
@@ -204,7 +204,7 @@ impl App {
                         ui.label(n.auth.as_deref().unwrap_or("加密未知"));
                         let already = self.cfg.targets.list.contains(&n.ssid);
                         if already {
-                            ui.label("✓");
+                            ui.label("已加");
                         } else if ui.add_enabled(!busy, egui::Button::new("+加入").small()).clicked() {
                             self.cfg.targets.list.push(n.ssid.clone());
                         }
@@ -215,14 +215,14 @@ impl App {
         }
 
         ui.separator();
-        ui.collapsing("⚙ 高级设置（PIN / 时长 / 路径）", |ui| {
+        ui.collapsing("高级设置（PIN / 时长 / 路径）", |ui| {
             ui.add_space(4.0);
             ui.label("WPS PIN 列表");
             let mut rm_pin: Option<usize> = None;
             for (i, p) in self.cfg.wps.pins.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
                     ui.add(egui::TextEdit::singleline(p).desired_width(120.0));
-                    if ui.small_button("✕").clicked() {
+                    if ui.small_button("删除").clicked() {
                         rm_pin = Some(i);
                     }
                 });
@@ -265,7 +265,7 @@ impl App {
 
         ui.separator();
         ui.horizontal(|ui| {
-            if ui.button("💾 保存配置").clicked() {
+            if ui.button("保存配置").clicked() {
                 self.commit_str_fields();
                 match config::save(&self.cfg, &self.config_path) {
                     Ok(()) => {
@@ -276,7 +276,7 @@ impl App {
                 }
             }
             if self.saved_toast > 0.0 {
-                ui.colored_label(egui::Color32::GREEN, "已保存 ✓");
+                ui.colored_label(egui::Color32::GREEN, "已保存");
             }
         });
     }
@@ -289,7 +289,7 @@ impl App {
                     ui.label("当前连接:");
                     ui.strong(i.ssid.as_deref().unwrap_or("(未连接)"));
                     ui.label(i.state.as_deref().unwrap_or(""));
-                    if ui.small_button("↻").clicked() {
+                    if ui.small_button("刷新").clicked() {
                         self.last_status_refresh = Instant::now();
                         spawn_status_refresh(self.iface.clone(), self.busy.clone(), self.tx.clone());
                     }
@@ -305,24 +305,24 @@ impl App {
             let mk = |ui: &mut egui::Ui, label: &str| {
                 ui.add_enabled(!busy, egui::Button::new(label))
             };
-            if mk(ui, "🔍 扫描").clicked() {
+            if mk(ui, "扫描").clicked() {
                 self.launch_scan();
             }
-            if mk(ui, "🔓 WPS 探测").clicked() {
+            if mk(ui, "WPS 探测").clicked() {
                 self.launch_wps();
             }
-            if mk(ui, "📥 抓包").clicked() {
+            if mk(ui, "抓包").clicked() {
                 self.launch_capture();
             }
-            if mk(ui, "🔑 爆破").clicked() {
+            if mk(ui, "爆破").clicked() {
                 self.launch_crack();
             }
-            if mk(ui, "📤 导出密码").clicked() {
+            if mk(ui, "导出密码").clicked() {
                 self.launch_export();
             }
             let run_btn = ui.add_enabled(
                 !busy,
-                egui::Button::new("▶ 全流程").fill(egui::Color32::from_rgb(30, 90, 40)),
+                egui::Button::new("运行全流程").fill(egui::Color32::from_rgb(30, 90, 40)),
             );
             if run_btn.clicked() {
                 self.launch_full();
@@ -335,7 +335,7 @@ impl App {
             ui.label(format!(
                 "上次全流程: {}s · 网络恢复: {} · 原 {} → 现 {}",
                 s.elapsed_sec,
-                if s.restored { "✓" } else { "✗" },
+                if s.restored { "是" } else { "否" },
                 s.original_ssid,
                 s.final_ssid.as_deref().unwrap_or("(未连接)")
             ));
@@ -399,7 +399,7 @@ impl App {
                             "  {}: {}",
                             t,
                             if r.cracked == Some(true) {
-                                "CRACKED ✓"
+                                "破解成功"
                             } else if r.found == Some(false) {
                                 "不可见"
                             } else {
@@ -467,7 +467,7 @@ impl App {
                                     "  {}: {}",
                                     r.cap,
                                     if r.cracked {
-                                        format!("CRACKED ✓ = {}", r.password.as_deref().unwrap_or("(未知)"))
+                                        format!("破解成功 = {}", r.password.as_deref().unwrap_or("(未知)"))
                                     } else {
                                         "未破解".into()
                                     }
