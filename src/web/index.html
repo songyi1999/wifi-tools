@@ -341,7 +341,9 @@ function renderWslAps() {
     rows += `<tr><td>${a.essid}</td><td class="sig ${cls}">${a.power} dBm</td><td>${a.channel}</td>` +
       `<td style="font-size:11px">${a.bssid}</td>` +
       `<td><button class="min" onclick="wslCap('${a.bssid}','${a.channel}','${a.essid.replace(/'/g,"\\'")}')">抓包</button> ` +
-      `<button class="min" onclick="wslPixie('${a.bssid}','${a.essid.replace(/'/g,"\\'")}')">PIN</button></td></tr>`;
+      `<button class="min" onclick="wslPixie('${a.bssid}','${a.essid.replace(/'/g,"\\'")}')">PIN</button> ` +
+      `<button class="min" onclick="addTarget('${a.essid.replace(/'/g,"\\'")}')">加入</button> ` +
+      `<button class="min" onclick="hideAp('${a.bssid}')">删</button></td></tr>`;
   }
   $('wslapwrap').innerHTML = `<table><tr><th>SSID</th><th>信号</th><th>ch</th><th>BSSID</th><th></th></tr>${rows}</table>`;
 }
@@ -361,15 +363,13 @@ function stopBatch() {
 }
 function addAllWsl() {
   if (!wslAps || !wslAps.length) return;
-  const list = $('targets').value.split('
-').map(s=>s.trim()).filter(Boolean);
+  const list = $('targets').value.split('\n').map(s=>s.trim()).filter(Boolean);
   let added = 0;
   for (const a of wslAps) {
     if (a.essid === '(隐藏)') continue;
     if (!list.includes(a.essid)) { list.push(a.essid); added++; }
   }
-  $('targets').value = list.join('
-');
+  $('targets').value = list.join('\n');
   renderWslAps();
   pushLog(added ? [`已把 ${added} 个 SSID 加入目标列表（记得保存配置）`] : ['目标列表已包含全部扫描结果']);
 }
