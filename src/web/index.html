@@ -141,12 +141,12 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') document.get
       <span id="wsliface" class="kv"></span>
     </div>
     <div class="row">
-      <button id="wslattach" data-task="wsl_attach" disabled>1 接入网卡</button>
-      <button id="wslscan" data-task="wsl_scan" disabled title="先完成第 1 步：接入网卡">2 WSL 扫描 (13s)</button>
+      <button id="wslattach" data-gated="1" data-task="wsl_attach" disabled>1 接入网卡</button>
+      <button id="wslscan" data-gated="1" data-task="wsl_scan" disabled title="先完成第 1 步：接入网卡">2 WSL 扫描 (13s)</button>
     </div>
     <div class="row">
-      <button id="wslbatchpin" data-task="wsl_batch_pin" disabled title="先完成第 2 步：WSL 扫描">3 批量 PIN（按目标列表）</button>
-      <button id="wslbatchcap" data-task="wsl_batch_cap" disabled title="先完成第 2 步：WSL 扫描">4 批量 抓包（按目标列表）</button>
+      <button id="wslbatchpin" data-gated="1" data-task="wsl_batch_pin" disabled title="先完成第 2 步：WSL 扫描">3 批量 PIN（按目标列表）</button>
+      <button id="wslbatchcap" data-gated="1" data-task="wsl_batch_cap" disabled title="先完成第 2 步：WSL 扫描">4 批量 抓包（按目标列表）</button>
       <button id="wslstop" class="min" onclick="stopBatch()" disabled>停止批量</button>
       <button id="wsladdall" class="min" onclick="addAllWsl()" disabled>全部加入目标</button>
     </div>
@@ -280,7 +280,12 @@ function setBusy(name) {
     const p = $('busy');
     p.textContent = '空闲';
     p.className = 'pill';
-    renderWsl(); // re-apply gating immediately (no flicker window)
+    // Re-enable everything except WSL-card buttons, whose gating renderWsl()
+    // owns (fixes both the flicker and buttons stuck disabled after a task).
+    document.querySelectorAll('[data-task]').forEach(b => {
+      if (!b.hasAttribute('data-gated')) b.disabled = false;
+    });
+    renderWsl(); // re-apply WSL gating immediately
   }
 }
 function renderSummary(s) {

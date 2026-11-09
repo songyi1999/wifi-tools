@@ -323,6 +323,11 @@ fn task_wsl_batch(st: Arc<AppState>, do_pin: bool) {
         (c.wsl.distro.clone(), c.wsl.pixie_timeout_sec, c.capture.duration_sec)
     };
     st.stop.store(false, std::sync::atomic::Ordering::Relaxed);
+    if !wslattack::has_device(&distro) || wslattack::find_iface(&distro).is_none() {
+        *st.wsl_iface.lock().unwrap() = None;
+        events::global().push("网卡未就绪（可能已掉线）— 请先点「1 接入网卡」，再批量");
+        return;
+    }
     let Some(iface) = st.wsl_iface.lock().unwrap().clone() else {
         events::global().push("先执行「接入网卡」");
         return;
@@ -360,6 +365,8 @@ fn task_wsl_batch(st: Arc<AppState>, do_pin: bool) {
 
     let mut done = 0usize;
     let mut hits = 0usize;
+    let mut ok_cnt = 0usize;
+    let mut fail_cnt = 0usize;
     let total = targets.len();
     for (idx, tgt) in targets.iter().enumerate() {
         if st.stop.load(std::sync::atomic::Ordering::Relaxed) {
@@ -397,16 +404,28 @@ fn task_wsl_batch(st: Arc<AppState>, do_pin: bool) {
             }
         } else {
             match wslattack::capture(&distro, &iface, &ap.bssid, &ap.channel, &ap.essid, sec, &caps_str) {
-                Ok(file) => events::global().push(format!("    抓包完成 -> {file}")),
-                Err(e) => events::global().push(format!("    抓包失败: {e:#}")),
+                Ok(file) => {
+                    ok_cnt += 1;
+                    events::global().push(format!("    抓包完成 -> {file}"));
+                }
+                Err(e) => {
+                    fail_cnt += 1;
+                    events::global().push(format!("    抓包失败: {e:#}"));
+                }
             }
         }
         done += 1;
     }
     if do_pin {
         events::global().push(format!("批量结束：处理 {done} 个，命中 {hits} 个"));
+    } else if ok_cnt > 0 {
+        events::global().push(format!(
+            "批量结束：抓包成功 {ok_cnt} 个、失败 {fail_cnt} 个（logs/caps/）— 可点右栏「爆破」跑字典"
+        ));
     } else {
-        events::global().push(format!("批量结束：抓包 {done} 个（logs/caps/），可点「爆破」跑字典"));
+        events::global().push(format!(
+            "批量结束：抓包全部失败（{fail_cnt} 个）— 未产出任何 cap，无法爆破；请检查网卡后重试"
+        ));
     }
 }
 
@@ -512,9 +531,7 @@ fn task_wsl_attach(st: Arc<AppState>) {
     let (state, summary, wiface) = wsl_state_summary(&distro);
     *st.wsl_state.lock().unwrap() = state.into();
     *st.wsl_adapter.lock().unwrap() = summary;
-    if wiface.is_some() {
-        *st.wsl_iface.lock().unwrap() = wiface;
-    }
+    *st.wsl_iface.lock().unwrap() = wiface;
 
     // Fast path: already attached and an interface exists — nothing to do.
     if let Some(iface) = wslattack::find_iface(&distro) {
@@ -656,6 +673,11 @@ fn task_wsl_capture(st: Arc<AppState>, bssid: String, ch: String, essid: String)
         events::global().push("先执行「接入网卡」");
         return;
     };
+    if !wslattack::has_device(&distro) || wslattack::find_iface(&distro).is_none() {
+        *st.wsl_iface.lock().unwrap() = None;
+        events::global().push("网卡未就绪（可能已掉线）— 请先点「1 接入网卡」");
+        return;
+    }
     let logs_dir = config::ensure_logs_dir();
     let caps_abs = std::fs::canonicalize(logs_dir.join("caps")).unwrap_or_else(|_| std::path::PathBuf::from("logs/caps"));
     // strip the \\?\ canonical prefix and map X:\... -> /mnt/x/... for Linux
@@ -686,6 +708,11 @@ fn task_wsl_pixie(st: Arc<AppState>, bssid: String, essid: String) {
         events::global().push("先执行「接入网卡」");
         return;
     };
+    if !wslattack::has_device(&distro) || wslattack::find_iface(&distro).is_none() {
+        *st.wsl_iface.lock().unwrap() = None;
+        events::global().push("网卡未就绪（可能已掉线）— 请先点「1 接入网卡」");
+        return;
+    }
     events::global().push(format!("PixieDust 攻击 {essid} ({bssid})，超时 {tmo}s…"));
     match wslattack::pixie(&distro, &iface, &bssid, tmo) {
         Ok(p) => {
@@ -763,9 +790,7 @@ pub fn start(cfg: Config) -> Result<()> {
                 let (state, summary, wiface) = wsl_state_summary(&distro);
                 *st.wsl_state.lock().unwrap() = state.into();
                 *st.wsl_adapter.lock().unwrap() = summary;
-                if wiface.is_some() {
-                    *st.wsl_iface.lock().unwrap() = wiface;
-                }
+                *st.wsl_iface.lock().unwrap() = wiface;
             }
             std::thread::sleep(Duration::from_secs(10));
         });
