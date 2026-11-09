@@ -141,7 +141,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') document.get
       <span id="wsliface" class="kv"></span>
     </div>
     <div class="row">
-      <button data-task="wsl_attach">接入网卡（含U盘切换/进监听）</button>
+      <button id="wslattach" data-task="wsl_attach">接入网卡（含U盘切换/进监听）</button>
       <button data-task="wsl_scan">WSL 扫描 (13s)</button>
     </div>
     <div class="row">
@@ -323,6 +323,8 @@ function renderWsl() {
     s.textContent = d.adapter;
     s.className = 'pill' + (d.iface ? ' ok' : '');
     $('wsliface').textContent = d.iface ? `接口: ${d.iface}（监听模式）` : '';
+    const ab = document.getElementById('wslattach');
+    if (ab) { ab.disabled = !!d.iface; ab.title = d.iface ? '网卡已就绪，无需重复接入' : ''; }
     if (JSON.stringify(d.aps) !== JSON.stringify(wslAps)) {
       wslAps = d.aps;
       renderWslAps();

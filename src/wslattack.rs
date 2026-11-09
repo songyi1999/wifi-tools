@@ -148,9 +148,8 @@ eject /dev/$dev && echo EJECTED || echo EJECT_FAIL
     if out.contains("NO_MSC") {
         return Ok(false);
     }
-    if out.contains("EJECT_FAIL") {
-        bail!("eject 失败（设备忙碌？）");
-    }
+    // "unable to eject" from the eject utility is common yet the SCSI switch
+    // still fires — treat it as success and let the caller wait for re-enum.
     Ok(true)
 }
 

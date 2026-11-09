@@ -473,34 +473,66 @@ fn wsl_adapter_summary() -> String {
 
 fn task_wsl_attach(st: Arc<AppState>) {
     *st.wsl_adapter.lock().unwrap() = wsl_adapter_summary();
-    let Some(info) = wslattack::adapter() else {
+    let distro = st.cfg.lock().unwrap().wsl.distro.clone();
+
+    // Fast path: already attached and an interface exists — nothing to do.
+    if let Some(iface) = wslattack::find_iface(&distro) {
+        let _ = wslattack::up_monitor(&distro, &iface);
+        *st.wsl_iface.lock().unwrap() = Some(iface.clone());
+        *st.wsl_adapter.lock().unwrap() = wsl_adapter_summary();
+        events::global().push(format!("网卡已就绪（{iface} 监听模式），无需重新接入"));
+        return;
+    }
+
+    let Some(mut info) = wslattack::adapter() else {
         events::global().push("未检测到 AIC 网卡 — 请插入 Tenda U2");
         return;
     };
-    let distro = st.cfg.lock().unwrap().wsl.distro.clone();
 
-    // MSC mode: eject the fake CD on the WINDOWS side (avoids the
-    // "device used by Windows" attach refusal); device re-enumerates as WLAN.
+    // MSC (fake CD) mode: switch it to WLAN.
     if info.mode == AdapterMode::Msc {
-        events::global().push("U盘模式：在 Windows 侧弹出伪U盘…");
-        if let Err(e) = wslattack::windows_eject_msc() {
-            events::global().push(format!("弹出失败: {e:#}"));
-        }
-        for _ in 0..8 {
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            match wslattack::adapter() {
-                Some(a) if a.mode == AdapterMode::Wlan => break,
-                _ => {}
+        if info.attached {
+            // Already attached to WSL: eject from inside Kali (most reliable —
+            // Windows cannot interfere with a device it doesn't own).
+            events::global().push("U盘模式已挂在 WSL — 直接弹出切换…");
+            match wslattack::eject_msc(&distro) {
+                Ok(true) => events::global().push("弹出指令已发送，等待重新枚举…"),
+                Ok(false) => events::global().push("WSL 内未找到 U 盘设备"),
+                Err(e) => events::global().push(format!("弹出报错（通常仍会切换）: {e:#}")),
+            }
+        } else {
+            // On Windows: try attaching first; if Windows claims the storage,
+            // fall back to a Windows-side shell eject, then re-detect.
+            events::global().push("U盘模式：尝试接入 WSL…");
+            if let Err(e) = wslattack::attach(&info) {
+                events::global().push(format!("接入被拒（{e:#}），改用 Windows 侧弹出…"));
+                let _ = wslattack::windows_eject_msc();
             }
         }
+        // Wait for re-enumeration into WLAN mode (up to ~15s).
+        let mut wlan = None;
+        for _ in 0..15 {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            if let Some(a) = wslattack::adapter() {
+                if a.mode == AdapterMode::Wlan {
+                    wlan = Some(a);
+                    break;
+                }
+            }
+        }
+        let Some(wi) = wlan else {
+            *st.wsl_adapter.lock().unwrap() = wsl_adapter_summary();
+            events::global().push("未回到 WiFi 模式 — 拔插一次网卡后重试");
+            return;
+        };
+        events::global().push("已切换为 WiFi 模式");
+        info = wi;
     }
 
-    // WLAN mode: attach to WSL (auto-elevate if bind lost)
-    let Some(info) = wslattack::adapter() else {
-        events::global().push("未找到网卡（检查 Windows 设备管理器）");
-        return;
-    };
-    if info.mode == AdapterMode::Wlan && !info.attached {
+    // WLAN mode: attach to WSL (auto-elevate bind --force via UAC if needed).
+    if info.attached {
+        events::global().push("网卡已接入 WSL，跳过重复接入");
+    } else {
         events::global().push(format!("接入 WSL: {}（未共享时会弹 UAC）", info.busid));
         if let Err(e) = wslattack::attach(&info) {
             events::global().push(format!("接入失败: {e:#}"));
@@ -513,20 +545,14 @@ fn task_wsl_attach(st: Arc<AppState>) {
     // in the (restarted) WSL VM — detach and re-attach.
     if !wslattack::has_device(&distro) {
         events::global().push("WSL 内未看到设备 — 清除陈旧接入后重试…");
-        if let Some(a) = wslattack::adapter() {
-            wslattack::detach(&a.busid);
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            // detach may power-cycle the dongle back to MSC mode — eject again
-            let _ = wslattack::windows_eject_msc();
-            std::thread::sleep(std::time::Duration::from_secs(3));
-            let _ = std::process::Command::new(wslattack::USBIPD)
-                .args(["attach", "--wsl", "--busid", &a.busid])
-                .output();
-            std::thread::sleep(std::time::Duration::from_secs(4));
-        }
-        std::thread::sleep(std::time::Duration::from_secs(3));
+        wslattack::detach(&info.busid);
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let _ = std::process::Command::new(wslattack::USBIPD)
+            .args(["attach", "--wsl", "--busid", &info.busid])
+            .output();
+        std::thread::sleep(std::time::Duration::from_secs(4));
     }
-    // No udev coldplug in WSL — load the driver explicitly.
+    // No udev coldplug in WSL — load the driver explicitly (self-healing).
     if let Err(e) = wslattack::load_driver(&distro) {
         events::global().push(format!("驱动加载失败: {e:#}"));
         return;
