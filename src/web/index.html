@@ -269,10 +269,19 @@ function addTarget(ssid) {
 
 function setBusy(name) {
   busyName = name;
-  document.querySelectorAll('[data-task]').forEach(b => b.disabled = !!name);
-  const p = $('busy');
-  if (name) { p.textContent = '运行中: ' + name; p.className = 'pill busy'; }
-  else { p.textContent = '空闲'; p.className = 'pill'; }
+  // While a task runs, block every trigger. When idle, do NOT blanket-enable:
+  // the step-gating in renderWsl() owns each button's disabled state.
+  if (name) {
+    document.querySelectorAll('[data-task]').forEach(b => b.disabled = true);
+    const p = $('busy');
+    p.textContent = '运行中: ' + name;
+    p.className = 'pill busy';
+  } else {
+    const p = $('busy');
+    p.textContent = '空闲';
+    p.className = 'pill';
+    renderWsl(); // re-apply gating immediately (no flicker window)
+  }
 }
 function renderSummary(s) {
   if (!s) { $('summary').innerHTML = ''; return; }
