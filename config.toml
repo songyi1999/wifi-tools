@@ -37,3 +37,9 @@ timeout_sec = 1800
 # Reconnect target after pipeline ends; auto-detected from current connection at runtime
 # Leave empty = remember current network before run
 ssid = ""
+
+[wsl]
+# Kali WSL distro for hardware attacks (Tenda U2 / AIC8800DC USB adapter)
+distro = "kali-linux"
+# PixieDust attack timeout per target
+pixie_timeout_sec = 90

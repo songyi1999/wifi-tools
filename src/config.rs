@@ -169,6 +169,29 @@ impl Default for RestoreCfg {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WslCfg {
+    /// Kali WSL distro name
+    #[serde(default = "default_wsl_distro")]
+    pub distro: String,
+    /// PixieDust attack timeout per target
+    #[serde(default = "default_pixie_timeout")]
+    pub pixie_timeout_sec: u64,
+}
+
+fn default_wsl_distro() -> String {
+    "kali-linux".into()
+}
+fn default_pixie_timeout() -> u64 {
+    90
+}
+
+impl Default for WslCfg {
+    fn default() -> Self {
+        Self { distro: default_wsl_distro(), pixie_timeout_sec: default_pixie_timeout() }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub targets: TargetsCfg,
@@ -182,6 +205,8 @@ pub struct Config {
     pub crack: CrackCfg,
     #[serde(default)]
     pub restore: RestoreCfg,
+    #[serde(default)]
+    pub wsl: WslCfg,
 }
 
 impl Default for Config {
@@ -199,7 +224,8 @@ impl Default for Config {
                 interface: default_interface(),
             },
             crack: CrackCfg::default(),
-            restore: RestoreCfg { ssid: String::new() },
+            restore: RestoreCfg::default(),
+            wsl: WslCfg::default(),
         }
     }
 }

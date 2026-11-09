@@ -62,6 +62,18 @@
     </div>
     <div id="netwrap"></div>
     <hr>
+    <h2>硬件攻击（WSL + Tenda U2 监听网卡）</h2>
+    <div class="row">
+      <span id="wslstatus" class="pill">检测中…</span>
+      <span id="wsliface" class="kv"></span>
+    </div>
+    <div class="row">
+      <button data-task="wsl_attach">接入网卡（含U盘切换/进监听）</button>
+      <button data-task="wsl_scan">WSL 扫描 (13s)</button>
+    </div>
+    <div id="wslapwrap"><span class="kv">接入后扫描可列出附近 AP，每行可定向抓包 / PixieDust</span></div>
+    <div id="pixieres"></div>
+    <hr>
     <h2>高级设置</h2>
     <details open>
       <div class="field"><label>WPS PIN 列表（每行一个）</label><textarea id="pins" rows="3" spellcheck="false"></textarea></div>
@@ -106,7 +118,7 @@
   </div>
 </main>
 <script>
-let last = 0, cfg = null, busyName = null, nets = null;
+let last = 0, cfg = null, busyName = null, nets = null, wslAps = null, pixieOut = null;
 
 const $ = id => document.getElementById(id);
 const jget = async u => (await fetch(u)).json();
@@ -229,6 +241,50 @@ async function refreshIface() {
   pollState();
 }
 
+function renderWsl() {
+  fetch('/api/wsl').then(r=>r.json()).then(d => {
+    const s = $('wslstatus');
+    s.textContent = d.adapter;
+    s.className = 'pill' + (d.iface ? ' ok' : '');
+    $('wsliface').textContent = d.iface ? `接口: ${d.iface}（监听模式）` : '';
+    if (JSON.stringify(d.aps) !== JSON.stringify(wslAps)) {
+      wslAps = d.aps;
+      renderWslAps();
+    }
+    if (JSON.stringify(d.pixie) !== JSON.stringify(pixieOut)) {
+      pixieOut = d.pixie;
+      renderPixie();
+    }
+  }).catch(()=>{});
+}
+function renderWslAps() {
+  if (!wslAps || !wslAps.length) { $('wslapwrap').innerHTML = '<span class="kv">（尚未 WSL 扫描）</span>'; return; }
+  let rows = '';
+  for (const a of wslAps) {
+    const cls = a.power >= -60 ? 'g' : (a.power >= -75 ? 'y' : 'r');
+    rows += `<tr><td>${a.essid}</td><td class="sig ${cls}">${a.power} dBm</td><td>${a.channel}</td>` +
+      `<td style="font-size:11px">${a.bssid}</td>` +
+      `<td><button class="min" onclick="wslCap('${a.bssid}','${a.channel}','${a.essid.replace(/'/g,"\\'")}')">抓包</button> ` +
+      `<button class="min" onclick="wslPixie('${a.bssid}','${a.essid.replace(/'/g,"\\'")}')">PIN</button></td></tr>`;
+  }
+  $('wslapwrap').innerHTML = `<table><tr><th>SSID</th><th>信号</th><th>ch</th><th>BSSID</th><th></th></tr>${rows}</table>`;
+}
+function renderPixie() {
+  if (!pixieOut || !pixieOut.length) { $('pixieres').innerHTML = ''; return; }
+  const hits = pixieOut.filter(p=>p.pin);
+  let html = hits.map(p=>`<div class="okmark">命中 ${p.bssid}: PIN=${p.pin} PSK=${p.psk ?? '(无)'}</div>`).join('');
+  const miss = pixieOut.filter(p=>!p.pin).map(p=>p.bssid);
+  if (miss.length) html += `<div class="kv">未命中: ${miss.join(', ')}</div>`;
+  $('pixieres').innerHTML = html;
+}
+function wslCap(bssid, ch, essid) {
+  jpost('/api/task', {task:'wsl_capture', bssid, ch, essid}).catch(e=>pushLog(['[错误] '+e.message]));
+}
+function wslPixie(bssid, essid) {
+  if (!confirm(`对 ${essid} (${bssid}) 执行 PixieDust WPS 攻击？\n仅限你自己的或已获授权的网络！`)) return;
+  jpost('/api/task', {task:'wsl_pixie', bssid, essid}).catch(e=>pushLog(['[错误] '+e.message]));
+}
+
 document.querySelectorAll('[data-task]').forEach(b => {
   b.addEventListener('click', async () => {
     const t = b.dataset.task;
@@ -237,9 +293,10 @@ document.querySelectorAll('[data-task]').forEach(b => {
   });
 });
 
-pollEvents(); pollState();
+pollEvents(); pollState(); renderWsl();
 setInterval(pollEvents, 700);
 setInterval(pollState, 2000);
+setInterval(renderWsl, 2500);
 </script>
 </body>
 </html>
