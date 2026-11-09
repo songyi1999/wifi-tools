@@ -432,16 +432,23 @@ function renderPixie() {
   let rows = '';
   for (const h of hits) {
     const psk = h.psk ?? '';
+    let sig = '--', weak = '';
+    if (h.signal != null) {
+      const cls = h.signal >= -60 ? 'g' : (h.signal >= -75 ? 'y' : 'r');
+      sig = `<span class="sig ${cls}">${h.signal} dBm</span>`;
+      if (h.signal < -75) weak = '信号弱：密码对也可能连不上，靠近 AP 再试';
+    }
     rows += `<tr class="hitrow"><td>${h.time || ''}</td><td><b>${h.essid || '?'}</b></td>` +
-      `<td style="font-size:11px">${h.bssid}</td><td><b>${h.pin ?? '(无)'}</b></td>` +
+      `<td style="font-size:11px">${h.bssid}</td><td>${sig}</td><td><b>${h.pin ?? '(无)'}</b></td>` +
       `<td>${psk || '(无)'}</td>` +
       `<td><button class="min" onclick="copyText(decodeURIComponent('${encodeURIComponent(psk)}'),'PSK')">复制密码</button> ` +
-      `<button class="min" onclick="copyText(decodeURIComponent('${encodeURIComponent(h.pin ?? '')}'),'PIN')">复制PIN</button></td></tr>`;
+      `<button class="min" onclick="copyText(decodeURIComponent('${encodeURIComponent(h.pin ?? '')}'),'PIN')">复制PIN</button></td>` +
+      `<td class="kv" style="max-width:200px">${weak}</td></tr>`;
   }
   wrap.innerHTML =
     `<div class="okmark" style="margin:6px 0 2px">命中 ${hits.length} 条（已自动保存 logs\hits.json / hits.txt）</div>` +
-    `<table><tr><th>时间</th><th>SSID</th><th>BSSID</th><th>PIN</th><th>PSK（=WiFi密码）</th><th></th></tr>${rows}</table>` +
-    `<div class="kv">用法：PSK 就是该 WiFi 的密码，任意设备连接该 SSID 时输入即可。</div>`;
+    `<table><tr><th>时间</th><th>SSID</th><th>BSSID</th><th>信号</th><th>PIN</th><th>PSK（=WiFi密码）</th><th></th><th></th></tr>${rows}</table>` +
+    `<div class="kv">用法：PSK 就是该 WiFi 的密码，任意设备连接该 SSID 时输入即可。信号太弱先解决距离/天线。</div>`;
 }
 function copyText(text, label) {
   if (!text) return;

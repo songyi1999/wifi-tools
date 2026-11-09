@@ -450,6 +450,7 @@ fn task_wsl_batch(st: Arc<AppState>, do_pin: bool) {
             match wslattack::pixie(&distro, &iface, &ap.bssid, tmo) {
                 Ok(mut p) => {
                     p.essid = Some(ap.essid.clone());
+                    p.signal = Some(ap.power);
                     if p.pin.is_some() {
                         hits += 1;
                         events::global().push(format!(
@@ -877,6 +878,13 @@ fn task_wsl_pixie(st: Arc<AppState>, bssid: String, essid: String) {
     match wslattack::pixie(&distro, &iface, &bssid, tmo) {
         Ok(mut p) => {
             p.essid = Some(essid.clone());
+            p.signal = st
+                .wsl_aps
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|a| a.bssid.eq_ignore_ascii_case(&bssid))
+                .and_then(|a| Some(a.power));
             if p.pin.is_some() {
                 events::global().push(format!(
                     "*** PixieDust 命中 {} PIN={} PSK={}（已保存） ***",

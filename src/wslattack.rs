@@ -46,6 +46,8 @@ pub struct PixieOut {
     pub psk: Option<String>,
     #[serde(default)]
     pub time: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<i32>,
     #[serde(default)]
     pub tail: String,
 }
@@ -393,6 +395,7 @@ echo __ONEShot_DONE__"#,
     Ok(PixieOut {
         bssid: bssid.to_string(),
         essid: None,
+        signal: None,
         pin,
         psk,
         time: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
