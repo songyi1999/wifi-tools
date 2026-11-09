@@ -141,15 +141,16 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') document.get
       <span id="wsliface" class="kv"></span>
     </div>
     <div class="row">
-      <button id="wslattach" data-task="wsl_attach">接入网卡（含U盘切换/进监听）</button>
-      <button data-task="wsl_scan">WSL 扫描 (13s)</button>
+      <button id="wslattach" data-task="wsl_attach" disabled>1 接入网卡</button>
+      <button id="wslscan" data-task="wsl_scan" disabled title="先完成第 1 步：接入网卡">2 WSL 扫描 (13s)</button>
     </div>
     <div class="row">
-      <button data-task="wsl_batch_pin">批量 PIN（按目标列表）</button>
-      <button data-task="wsl_batch_cap">批量 抓包（按目标列表）</button>
-      <button class="min" onclick="stopBatch()">停止批量</button>
-      <button class="min" onclick="addAllWsl()">全部加入目标</button>
+      <button id="wslbatchpin" data-task="wsl_batch_pin" disabled title="先完成第 2 步：WSL 扫描">3 批量 PIN（按目标列表）</button>
+      <button id="wslbatchcap" data-task="wsl_batch_cap" disabled title="先完成第 2 步：WSL 扫描">4 批量 抓包（按目标列表）</button>
+      <button id="wslstop" class="min" onclick="stopBatch()" disabled>停止批量</button>
+      <button id="wsladdall" class="min" onclick="addAllWsl()" disabled>全部加入目标</button>
     </div>
+    <div id="wslhint" class="kv"></div>
     <div class="kv">批量按「目标 SSID 列表」顺序执行，逐行匹配扫描结果（支持部分匹配）；不感兴趣的在行内点「删」。</div>
     <div id="wslapwrap"><span class="kv">接入后扫描可列出附近 AP，每行可定向抓包 / PixieDust</span></div>
     <div id="pixieres"></div>
@@ -321,13 +322,15 @@ function renderWsl() {
   fetch('/api/wsl').then(r=>r.json()).then(d => {
     const pill = $('wslstatus'), ab = document.getElementById('wslattach');
     const busy = $('busy').textContent !== '空闲';
-    let btn = '接入网卡（含U盘切换/进监听）', dis = false, ok = false, tip = '';
+    const ready = d.state === 'ready';
+    const hasAps = (d.aps || []).length > 0;
+    let btn = '1 接入网卡', dis = false, ok = false, tip = '';
     switch (d.state) {
-      case 'ready':         btn = '网卡已就绪（监听中）'; dis = !busy; ok = true; tip = '网卡已就绪，无需重复接入'; break;
-      case 'missing':       btn = '未检测到网卡'; dis = true; tip = '请插入 Tenda U2 USB 网卡'; break;
-      case 'msc':           btn = '一键切换 U盘→监听'; tip = '将自动弹出伪U盘并进入监听模式'; break;
-      case 'wlan_pending':  btn = '激活监听模式'; tip = '网卡已接入，还需加载驱动进监听（很快，一般不弹窗）'; break;
-      case 'wlan_detached': btn = '接入网卡'; tip = '将把网卡接入 WSL'; break;
+      case 'ready':         btn = '1 网卡已就绪（监听中）'; dis = true; ok = true; tip = '网卡已就绪，无需重复接入'; break;
+      case 'missing':       btn = '1 未检测到网卡'; dis = true; tip = '请插入 Tenda U2 USB 网卡'; break;
+      case 'msc':           btn = '1 接入网卡（U盘→监听 一键切换）'; tip = '将自动弹出伪U盘并进入监听模式'; break;
+      case 'wlan_pending':  btn = '1 接入网卡（激活监听）'; tip = '网卡已接入，还需加载驱动进监听（很快，一般不弹窗）'; break;
+      case 'wlan_detached': btn = '1 接入网卡'; tip = '将把网卡接入 WSL（未共享时会弹 UAC）'; break;
     }
     pill.textContent = d.adapter;
     pill.className = 'pill' + (ok ? ' ok' : '');
@@ -337,6 +340,24 @@ function renderWsl() {
       ab.textContent = btn;
       ab.title = tip;
     }
+    // step gating: 2 needs ready; 3/4 need scan results; stop needs busy
+    const scanBtn = document.getElementById('wslscan');
+    scanBtn.disabled = busy || !ready;
+    scanBtn.title = ready ? '' : '先完成第 1 步：接入网卡';
+    const bp = document.getElementById('wslbatchpin');
+    const bc = document.getElementById('wslbatchcap');
+    bp.disabled = busy || !hasAps;
+    bc.disabled = busy || !hasAps;
+    bp.title = bc.title = hasAps ? '' : '先完成第 2 步：WSL 扫描';
+    document.getElementById('wsladdall').disabled = busy || !hasAps;
+    document.getElementById('wslstop').disabled = !busy;
+    // next-step hint
+    let hint = '';
+    if (d.state === 'missing') hint = '未检测到网卡，请插入 Tenda U2';
+    else if (!ready) hint = '第 1 步：接入网卡（完成后自动解锁第 2 步）';
+    else if (!hasAps) hint = '第 2 步：WSL 扫描，列出附近 AP';
+    else hint = '第 3 步：批量 PIN / 批量 抓包，或在下方逐行操作';
+    $('wslhint').textContent = hint;
     if (JSON.stringify(d.aps) !== JSON.stringify(wslAps)) {
       wslAps = d.aps;
       renderWslAps();
