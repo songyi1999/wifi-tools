@@ -6,6 +6,7 @@
 
 use anyhow::{bail, Result};
 use serde::Serialize;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -279,28 +280,49 @@ pub fn parse_ap_csv(csv: &str) -> Vec<Ap> {
 
 /// Capture a dedicated cap for one BSSID/channel into the Windows caps dir.
 /// `caps_dir_win` = E:\project\wifi-toolkit\logs\caps ; name = sanitized essid_bssid4.
-pub fn capture(distro: &str, iface: &str, bssid: &str, channel: &str, essid: &str, sec: u64, caps_dir_win: &str) -> Result<String> {
+/// `caps_dir_win` is the WINDOWS-side directory (E:\...\caps\<session>);
+/// verification happens on the Windows side because the WSL 9P dir listing
+/// lags/caches negative entries for new files written via /mnt/e.
+pub fn capture(distro: &str, iface: &str, bssid: &str, channel: &str, essid: &str, sec: u64, caps_dir_win: &Path) -> Result<String> {
     let safe: String = essid
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect();
     let b4 = bssid.replace(':', "")[0..4].to_string();
     let name = format!("{}_{}", safe, b4);
+    let win_str = caps_dir_win.to_string_lossy().into_owned();
+    let d_lin = format!(
+        "/mnt/{}{}",
+        (win_str.as_bytes()[0] as char).to_lowercase(),
+        win_str[2..].replace(std::path::MAIN_SEPARATOR, "/")
+    );
     let script = format!(
-        "mkdir -p '{d}' && rm -f '{d}/{n}'*.cap && timeout {s} airodump-ng {i} -c {c} --bssid {b} -w '{d}/{n}' --band bg >/dev/null 2>&1; ls '{d}'/{n}*.cap 2>/dev/null | head -1",
-        d = caps_dir_win.replace('\\', "/"),
+        "mkdir -p '{d}' && rm -f '{d}/{n}'*.cap && timeout {s} airodump-ng {i} -c {c} --bssid {b} -w '{d}/{n}' --band bg >/dev/null 2>&1",
+        d = d_lin,
         n = name,
         s = sec,
         i = iface,
         c = channel,
         b = bssid
     );
-    let out = kali(distro, &script)?;
-    let file = out.lines().last().unwrap_or("").trim().to_string();
-    if file.is_empty() || !file.ends_with(".cap") {
-        bail!("抓包未产出 cap 文件: {}", out.trim());
+    let _ = kali(distro, &script)?;
+    // Verify from the WINDOWS side: NTFS sees the file immediately, while
+    // the 9P directory listing inside WSL caches negative entries.
+    for _ in 0..15 {
+        if let Ok(rd) = std::fs::read_dir(caps_dir_win) {
+            for e in rd.flatten() {
+                let p = e.path();
+                let fname = p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                if p.extension().and_then(|x| x.to_str()) == Some("cap")
+                    && fname.starts_with(&name)
+                {
+                    return Ok(p.to_string_lossy().to_string());
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
-    Ok(file)
+    bail!("抓包未产出 cap 文件（{}*.cap）", name)
 }
 
 /// Run reaver PixieDust against one BSSID; parse PIN / PSK from output.

@@ -9,6 +9,7 @@ mod netsh;
 mod pipeline;
 mod restore;
 mod scan;
+mod session;
 mod web;
 mod wlanapi;
 mod wslattack;
@@ -40,7 +41,13 @@ enum Command {
     /// airodump-ng capture per target
     Capture,
     /// Offline crack of logs/caps/*.cap, or a specific cap with `cap` (+`dict`, "-" = patterns)
-    Crack { cap: Option<std::path::PathBuf>, dict: Option<std::path::PathBuf> },
+    Crack {
+        cap: Option<std::path::PathBuf>,
+        dict: Option<std::path::PathBuf>,
+        /// Crack scope when no cap given: latest (default) / all / <session dir>
+        #[arg(long)]
+        session: Option<String>,
+    },
     /// Manage dictionaries: list | update (download top-1M + password.lst)
     Dict { #[arg(default_value = "list")] action: String },
     /// Reconnect to a saved profile SSID (8 retries)
@@ -69,7 +76,7 @@ fn main() {
         Command::Nets => run_nets(),
         Command::Scan => run_scan(cfg),
         Command::Capture => run_capture(cfg),
-        Command::Crack { cap, dict } => run_crack(cfg, cap, dict),
+        Command::Crack { cap, dict, session } => run_crack(cfg, cap, dict, session),
         Command::Dict { action } => run_dict(cfg, &action),
         Command::Reconnect { ssid } => run_reconnect(&ssid),
         Command::ExportPasswords => run_export(),
@@ -173,7 +180,7 @@ fn run_capture(cfg: config::Config) -> i32 {
     }
 }
 
-fn run_crack(cfg: config::Config, cap: Option<std::path::PathBuf>, dict: Option<std::path::PathBuf>) -> i32 {
+fn run_crack(cfg: config::Config, cap: Option<std::path::PathBuf>, dict: Option<std::path::PathBuf>, cli_session: Option<String>) -> i32 {
     let logs_dir = config::ensure_logs_dir();
     let acng = cfg.crack.acng_bin.clone();
 
@@ -246,20 +253,34 @@ fn run_crack(cfg: config::Config, cap: Option<std::path::PathBuf>, dict: Option<
         };
     }
 
-    // Default: all caps in logs/caps
-    let caps_dir = capture::caps_dir(&logs_dir);
+    // Default: caps per scope (latest session by default)
+    let scope = cli_session.unwrap_or_else(|| "latest".into());
+    let caps_root = capture::caps_dir(&logs_dir);
+    let (caps_files, skipped, label) = match session::scope_caps(&caps_root, &scope, Some(&cfg.crack.acng_bin)) {
+        Ok(v) => v,
+        Err(e) => {
+            println!("{e:#}");
+            return 2;
+        }
+    };
+    println!("爆破范围: {} — {} 个有效 cap（跳过无握手 {skipped} 个）", label, caps_files.len());
+    if caps_files.is_empty() {
+        println!("没有可爆破的 cap（无握手）");
+        return 2;
+    }
     let dicts = cfg.effective_dicts();
     if dicts.is_empty() {
         tracing::error!("no dictionaries available — run `wifi-toolkit dict update` first");
         return 1;
     }
     println!(
-        "cracking all caps in {} with {} dict(s){}...",
-        caps_dir.display(),
+        "cracking scope [{}] caps in {} with {} dict(s){}...",
+        label,
+        caps_root.display(),
         dicts.len(),
         if cfg.crack.use_patterns { " + patterns" } else { "" }
     );
-    match crack::crack_caps(&acng, &caps_dir, &cfg.crack, &dicts, None) {
+    match crack::crack_caps_files(&acng, &caps_files, &cfg.crack, &dicts, None) {
         Ok(res) => {
             if let Err(e) = crack::save_result(&res, &logs_dir) {
                 tracing::error!("saving crack results: {:#}", e);

@@ -190,6 +190,11 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') document.get
       <button data-task="export">导出密码</button>
       <button data-task="full" class="primary">运行全流程</button>
     </div>
+    <div class="row">
+      <span class="kv">爆破范围:</span>
+      <select id="crackscope" onchange="jpost('/api/crackscope',{scope:this.value}).catch(e=>pushLog(['[错误] '+e.message]))"></select>
+      <span id="scopeinfo" class="kv"></span>
+    </div>
     <div id="summary"></div>
     <hr>
     <h2>执行日志</h2>
@@ -325,6 +330,27 @@ async function pollState() {
     renderSummary(d.summary);
     const n = await jget('/api/networks');
     if (JSON.stringify(n.networks) !== JSON.stringify(nets)) { nets = n.networks; renderNets(); }
+    renderScope();
+    async function renderScope() {
+      const w = await jget('/api/wsl').catch(()=>null);
+      if (!w) return;
+      const sel = $('crackscope');
+      const sessions = w.sessions || [];
+      let opts = '<option value="latest">本次抓包（最新会话）</option><option value="all">全部会话</option>';
+      for (const s of sessions) {
+        if (!s.dir) continue;
+        opts += `<option value="${s.dir}">${s.dir} (${s.caps} caps, 握手 ${s.handshakes}${s.unknown ? ', 未检 ' + s.unknown : ''})</option>`;
+      }
+      if (sel.dataset.sig !== opts) {
+        sel.dataset.sig = opts;
+        sel.innerHTML = opts;
+      }
+      sel.value = w.crack_scope || 'latest';
+      const cur = sessions.find(s => s.dir === sel.value);
+      $('scopeinfo').textContent = cur
+        ? `caps ${cur.caps} · 有效握手 ${cur.handshakes}${cur.unknown ? ' · 未检 ' + cur.unknown : ''}`
+        : (sel.value === 'all' ? '包含旧文件' : '');
+    }
   } catch {}
 }
 async function refreshIface() {

@@ -36,6 +36,9 @@ pub struct AppState {
     pub wsl_state: Mutex<String>,
     pub wsl_aps: Mutex<Vec<Ap>>,
     pub pixie_out: Mutex<Vec<PixieOut>>,
+    pub current_session: Mutex<Option<String>>,
+    pub crack_scope: Mutex<String>,
+    pub sessions: Mutex<Vec<crate::session::SessionInfo>>,
 }
 
 impl AppState {
@@ -56,6 +59,9 @@ impl AppState {
             wsl_state: Mutex::new("unknown".into()),
             wsl_aps: Mutex::new(Vec::new()),
             pixie_out: Mutex::new(Vec::new()),
+            current_session: Mutex::new(None),
+            crack_scope: Mutex::new("latest".into()),
+            sessions: Mutex::new(Vec::new()),
         }
     }
 
@@ -113,11 +119,24 @@ async fn api_networks(State(st): State<Arc<AppState>>) -> Json<serde_json::Value
 async fn api_wsl(State(st): State<Arc<AppState>>) -> Json<serde_json::Value> {
     Json(json!({
         "state": st.wsl_state.lock().unwrap().clone(),
+        "sessions": st.sessions.lock().unwrap().clone(),
+        "crack_scope": st.crack_scope.lock().unwrap().clone(),
         "adapter": st.wsl_adapter.lock().unwrap().clone(),
         "iface": st.wsl_iface.lock().unwrap().clone(),
         "aps": st.wsl_aps.lock().unwrap().clone(),
         "pixie": st.pixie_out.lock().unwrap().clone(),
     }))
+}
+
+#[derive(Deserialize)]
+struct ScopeReq {
+    scope: String,
+}
+
+async fn api_crackscope(State(st): State<Arc<AppState>>, Json(req): Json<ScopeReq>) -> Json<serde_json::Value> {
+    *st.crack_scope.lock().unwrap() = req.scope.clone();
+    events::global().push(format!("爆破范围设为: {}", req.scope));
+    Json(json!({ "ok": true }))
 }
 
 #[derive(Deserialize)]
@@ -263,7 +282,8 @@ fn task_capture(st: Arc<AppState>) {
 fn task_crack(st: Arc<AppState>) {
     let cfg = st.cfg.lock().unwrap().clone();
     let logs_dir = config::ensure_logs_dir();
-    let caps_dir = crate::capture::caps_dir(&logs_dir);
+    let scope = st.crack_scope.lock().unwrap().clone();
+    let caps_root = crate::capture::caps_dir(&logs_dir);
     let dicts = cfg.effective_dicts();
     events::global().push(format!(
         "爆破：模式字典={}，字典文件 {} 个{}",
@@ -271,7 +291,23 @@ fn task_crack(st: Arc<AppState>) {
         dicts.len(),
         if cfg.crack.full8 { "（含全量8位数字）" } else { "" }
     ));
-    match crate::crack::crack_caps(&cfg.crack.acng_bin, &caps_dir, &cfg.crack, &dicts, None) {
+    let (caps, skipped, label) =
+        match crate::session::scope_caps(&caps_root, &scope, Some(&cfg.crack.acng_bin)) {
+            Ok(v) => v,
+            Err(e) => {
+                events::global().push(format!("爆破中止: {e:#}"));
+                return;
+            }
+        };
+    events::global().push(format!(
+        "爆破范围 [{label}]：有效 cap {} 个，跳过无握手 {skipped} 个",
+        caps.len()
+    ));
+    if caps.is_empty() {
+        events::global().push("没有含握手的 cap — 先抓到握手再爆破（跑字典也找不到密码）");
+        return;
+    }
+    match crate::crack::crack_caps_files(&cfg.crack.acng_bin, &caps, &cfg.crack, &dicts, None) {
         Ok(res) => {
             if let Err(e) = crate::crack::save_result(&res, &logs_dir) {
                 events::global().push(format!("保存结果失败: {e:#}"));
@@ -318,9 +354,9 @@ fn find_ap_for_target<'a>(target: &str, aps: &'a [Ap]) -> Option<&'a Ap> {
 }
 
 fn task_wsl_batch(st: Arc<AppState>, do_pin: bool) {
-    let (distro, tmo, sec) = {
+    let (distro, tmo, sec, acng_bin) = {
         let c = st.cfg.lock().unwrap();
-        (c.wsl.distro.clone(), c.wsl.pixie_timeout_sec, c.capture.duration_sec)
+        (c.wsl.distro.clone(), c.wsl.pixie_timeout_sec, c.capture.duration_sec, c.crack.acng_bin.clone())
     };
     st.stop.store(false, std::sync::atomic::Ordering::Relaxed);
     if !wslattack::has_device(&distro) || wslattack::find_iface(&distro).is_none() {
@@ -343,6 +379,16 @@ fn task_wsl_batch(st: Arc<AppState>, do_pin: bool) {
     } else {
         format!("定向抓包（每目标 {sec}s）")
     };
+    // Each batch run is its own session directory, so cracking "本次" never
+    // touches caps from previous runs.
+    let sess_name = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let sess_rel = sess_name.clone();
+    {
+        let root = config::ensure_logs_dir();
+        let _ = std::fs::create_dir_all(root.join("caps").join(&sess_name));
+        *st.current_session.lock().unwrap() = Some(sess_name.clone());
+    }
+    events::global().push(format!("本次抓包会话: logs/caps/{}", sess_name));
     events::global().push(format!(
         "批量开始：{} 个目标 x {}",
         targets.len(),
@@ -357,6 +403,10 @@ fn task_wsl_batch(st: Arc<AppState>, do_pin: bool) {
         .trim_start_matches("?")
         .trim_start_matches(std::path::MAIN_SEPARATOR)
         .to_string();
+    let caps_win = match st.current_session.lock().unwrap().clone() {
+        Some(sess) => format!("{}\\{}", caps_win, sess),
+        None => caps_win,
+    };
     let caps_str = if caps_win.as_bytes().get(1) == Some(&b':') {
         format!("/mnt/{}{}", (caps_win.as_bytes()[0] as char).to_lowercase(), &caps_win[2..])
     } else {
@@ -403,9 +453,19 @@ fn task_wsl_batch(st: Arc<AppState>, do_pin: bool) {
                 Err(e) => events::global().push(format!("    失败: {e:#}")),
             }
         } else {
-            match wslattack::capture(&distro, &iface, &ap.bssid, &ap.channel, &ap.essid, sec, &caps_str) {
+            match wslattack::capture(&distro, &iface, &ap.bssid, &ap.channel, &ap.essid, sec, std::path::Path::new(&caps_win)) {
                 Ok(file) => {
                     ok_cnt += 1;
+                    let fname = std::path::Path::new(&file)
+                        .file_name()
+                        .map(|f| f.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    if !fname.is_empty() {
+                        let _ = crate::session::record_cap(
+                            &config::ensure_logs_dir().join("caps").join(&sess_rel),
+                            &fname, Some(&ap.essid), Some(&ap.bssid), Some(&ap.channel),
+                        );
+                    }
                     events::global().push(format!("    抓包完成 -> {file}"));
                 }
                 Err(e) => {
@@ -415,6 +475,18 @@ fn task_wsl_batch(st: Arc<AppState>, do_pin: bool) {
             }
         }
         done += 1;
+    }
+    if !do_pin {
+        let caps_root = config::ensure_logs_dir().join("caps").join(&sess_rel);
+        events::global().push("  检查各 cap 是否抓到握手…");
+        match crate::session::finalize_manifest(&caps_root, &acng_bin) {
+            Ok((with_hs, without)) => {
+                events::global().push(format!(
+                    "  会话结果：有效握手 {with_hs} 个 / 无握手 {without} 个"
+                ));
+            }
+            Err(e) => events::global().push(format!("  握手检查失败: {e:#}")),
+        }
     }
     if do_pin {
         events::global().push(format!("批量结束：处理 {done} 个，命中 {hits} 个"));
@@ -710,8 +782,10 @@ fn task_wsl_scan(st: Arc<AppState>) {
 }
 
 fn task_wsl_capture(st: Arc<AppState>, bssid: String, ch: String, essid: String) {
-    let distro = st.cfg.lock().unwrap().wsl.distro.clone();
-    let sec = st.cfg.lock().unwrap().capture.duration_sec;
+    let (distro, sec, acng_bin) = {
+        let c = st.cfg.lock().unwrap();
+        (c.wsl.distro.clone(), c.capture.duration_sec, c.crack.acng_bin.clone())
+    };
     let Some(iface) = st.wsl_iface.lock().unwrap().clone() else {
         events::global().push("先执行「接入网卡」");
         return;
@@ -722,7 +796,18 @@ fn task_wsl_capture(st: Arc<AppState>, bssid: String, ch: String, essid: String)
         return;
     }
     let logs_dir = config::ensure_logs_dir();
+    // ad-hoc single captures join the current session, or open a new one
+    {
+        let mut cur = st.current_session.lock().unwrap();
+        if cur.is_none() {
+            let name = chrono::Local::now().format("single_%Y%m%d_%H%M%S").to_string();
+            let _ = std::fs::create_dir_all(logs_dir.join("caps").join(&name));
+            *cur = Some(name);
+        }
+    }
+    let sess = st.current_session.lock().unwrap().clone().unwrap();
     let caps_abs = std::fs::canonicalize(logs_dir.join("caps")).unwrap_or_else(|_| std::path::PathBuf::from("logs/caps"));
+    let caps_root = logs_dir.join("caps");
     // strip the \\?\ canonical prefix and map X:\... -> /mnt/x/... for Linux
     let caps_win = caps_abs
         .to_string_lossy()
@@ -730,14 +815,31 @@ fn task_wsl_capture(st: Arc<AppState>, bssid: String, ch: String, essid: String)
         .trim_start_matches("?")
         .trim_start_matches(std::path::MAIN_SEPARATOR)
         .to_string();
+    let caps_win = format!("{}\\{}", caps_win, sess);
     let caps_str = if caps_win.as_bytes().get(1) == Some(&b':') {
         format!("/mnt/{}{}", (caps_win.as_bytes()[0] as char).to_lowercase(), &caps_win[2..])
     } else {
         caps_win.clone()
     };
     events::global().push(format!("定向抓包 {essid} ({bssid} ch{ch}) {sec}s — 等待目标客户端产生握手…"));
-    match wslattack::capture(&distro, &iface, &bssid, &ch, &essid, sec, &caps_str) {
-        Ok(file) => events::global().push(format!("抓包完成 -> {file}（可用「爆破」跑字典）")),
+    match wslattack::capture(&distro, &iface, &bssid, &ch, &essid, sec, std::path::Path::new(&caps_win)) {
+        Ok(file) => {
+            let fname = std::path::Path::new(&file)
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if !fname.is_empty() {
+                let _ = crate::session::record_cap(
+                    &caps_root.join(&sess), &fname, Some(&essid), Some(&bssid), Some(&ch),
+                );
+                match crate::session::check_handshake(&acng_bin, &caps_root.join(&sess).join(&fname)) {
+                    Some(true) => events::global().push("  抓到握手包！可点右栏「爆破」"),
+                    Some(false) => events::global().push("  本次未抓到握手（只有 beacon）— 需要目标有设备重新连接"),
+                    None => {}
+                }
+            }
+            events::global().push(format!("抓包完成 -> {file}"));
+        }
         Err(e) => events::global().push(format!("抓包失败: {e:#}")),
     }
 }
@@ -787,6 +889,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/networks", get(api_networks))
         .route("/api/wsl", get(api_wsl))
         .route("/api/wsl/hide", post(api_wsl_hide))
+        .route("/api/crackscope", post(api_crackscope))
         .route("/api/events", get(api_events))
         .route("/api/config", post(api_config_post))
         .route("/api/task", post(api_task))
@@ -834,6 +937,7 @@ pub fn start(cfg: Config) -> Result<()> {
                 *st.wsl_state.lock().unwrap() = state.into();
                 *st.wsl_adapter.lock().unwrap() = summary;
                 *st.wsl_iface.lock().unwrap() = wiface;
+                *st.sessions.lock().unwrap() = crate::session::list_sessions(&config::ensure_logs_dir().join("caps"));
             }
             std::thread::sleep(Duration::from_secs(10));
         });

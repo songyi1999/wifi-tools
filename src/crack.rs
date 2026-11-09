@@ -354,26 +354,17 @@ pub fn crack_one_patterns(
 }
 
 /// Crack every .cap in caps_dir: patterns first, then each dict file; stop on success.
-pub fn crack_caps(
+/// Crack an explicit list of cap files (session-aware callers use this).
+pub fn crack_caps_files(
     acng_bin: &Path,
-    caps_dir: &Path,
+    caps: &[PathBuf],
     cfg: &CrackCfg,
     dicts: &[PathBuf],
     _tx: Option<&EventTx>,
 ) -> Result<Vec<CrackResult>> {
-    let mut caps: Vec<PathBuf> = Vec::new();
-    if caps_dir.exists() {
-        for entry in std::fs::read_dir(caps_dir)? {
-            let entry = entry?;
-            let p = entry.path();
-            if p.extension().and_then(|e| e.to_str()) == Some("cap") {
-                caps.push(p);
-            }
-        }
-    }
-    caps.sort();
+    let caps: Vec<PathBuf> = caps.to_vec();
     if caps.is_empty() {
-        tracing::info!("crack: no .cap files in {} — nothing to do", caps_dir.display());
+        tracing::info!("crack: empty cap list — nothing to do");
         return Ok(Vec::new());
     }
     tracing::info!(
@@ -427,6 +418,32 @@ pub fn crack_caps(
     let n = results.iter().filter(|r| r.cracked).count();
     tracing::info!("crack: done {}/{} cracked", n, results.len());
     Ok(results)
+}
+
+/// Legacy helper: crack every .cap directly inside one directory.
+pub fn crack_caps(
+    acng_bin: &Path,
+    caps_dir: &Path,
+    cfg: &CrackCfg,
+    dicts: &[PathBuf],
+    tx: Option<&EventTx>,
+) -> Result<Vec<CrackResult>> {
+    let mut caps: Vec<PathBuf> = Vec::new();
+    if caps_dir.exists() {
+        for entry in std::fs::read_dir(caps_dir)? {
+            let entry = entry?;
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) == Some("cap") {
+                caps.push(p);
+            }
+        }
+    }
+    caps.sort();
+    if caps.is_empty() {
+        tracing::info!("crack: no .cap files in {} — nothing to do", caps_dir.display());
+        return Ok(Vec::new());
+    }
+    crack_caps_files(acng_bin, &caps, cfg, dicts, tx)
 }
 
 /// Save results JSON to logs/crack_results.json.
