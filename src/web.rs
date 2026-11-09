@@ -492,11 +492,13 @@ fn task_wsl_batch(st: Arc<AppState>, do_pin: bool) {
         }
         done += 1;
     }
+    let mut without = 0usize;
     if !do_pin {
         let caps_root = config::ensure_logs_dir().join("caps").join(&sess_rel);
         events::global().push("  检查各 cap 是否抓到握手…");
         match crate::session::finalize_manifest(&caps_root, &acng_bin) {
-            Ok((with_hs, without)) => {
+            Ok((with_hs, wo)) => {
+                without = wo;
                 events::global().push(format!(
                     "  会话结果：有效握手 {with_hs} 个 / 无握手 {without} 个"
                 ));
@@ -510,6 +512,11 @@ fn task_wsl_batch(st: Arc<AppState>, do_pin: bool) {
         events::global().push(format!(
             "批量结束：抓包成功 {ok_cnt} 个、失败 {fail_cnt} 个（logs/caps/）— 可点右栏「爆破」跑字典"
         ));
+        if without > 0 {
+            events::global().push(
+                "提示：部分目标无握手。本网卡（aic8800）不支持注入踢线，可把「抓包时长」调大（如 600s）守候目标设备自然重连；或换 RTL8812AU 网卡支持踢线。",
+            );
+        }
     } else {
         events::global().push(format!(
             "批量结束：抓包全部失败（{fail_cnt} 个）— 未产出任何 cap，无法爆破；请检查网卡后重试"
