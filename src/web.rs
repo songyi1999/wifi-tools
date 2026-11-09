@@ -448,21 +448,22 @@ fn task_wsl_batch(st: Arc<AppState>, do_pin: bool) {
         ));
         if do_pin {
             match wslattack::pixie(&distro, &iface, &ap.bssid, tmo) {
-                Ok(p) => {
+                Ok(mut p) => {
+                    p.essid = Some(ap.essid.clone());
                     if p.pin.is_some() {
                         hits += 1;
                         events::global().push(format!(
-                            "    *** 命中 {} PIN={} PSK={} ***",
-                            ap.bssid,
+                            "    *** 命中 {} PIN={} PSK={}（已保存） ***",
+                            ap.essid,
                             p.pin.as_deref().unwrap_or("?"),
                             p.psk.as_deref().unwrap_or("(无)")
                         ));
                     } else {
-                        events::global().push(format!("    未命中 {}", ap.bssid));
+                        events::global().push(format!("    未命中 {}", ap.essid));
                     }
-                    let mut all = st.pixie_out.lock().unwrap();
-                    all.retain(|x| x.bssid != p.bssid);
-                    all.push(p);
+                    let _ = crate::session::record_hit(&config::ensure_logs_dir(), p.clone());
+                    *st.pixie_out.lock().unwrap() =
+                        crate::session::load_hits(&config::ensure_logs_dir());
                 }
                 Err(e) => events::global().push(format!("    失败: {e:#}")),
             }
@@ -874,21 +875,21 @@ fn task_wsl_pixie(st: Arc<AppState>, bssid: String, essid: String) {
     }
     events::global().push(format!("PixieDust 攻击 {essid} ({bssid})，超时 {tmo}s…"));
     match wslattack::pixie(&distro, &iface, &bssid, tmo) {
-        Ok(p) => {
-            let hit = p.pin.is_some();
-            events::global().push(if hit {
-                format!(
-                    "*** PixieDust 命中 {} PIN={} PSK={} ***",
-                    bssid,
+        Ok(mut p) => {
+            p.essid = Some(essid.clone());
+            if p.pin.is_some() {
+                events::global().push(format!(
+                    "*** PixieDust 命中 {} PIN={} PSK={}（已保存） ***",
+                    essid,
                     p.pin.as_deref().unwrap_or("?"),
                     p.psk.as_deref().unwrap_or("(无)")
-                )
+                ));
             } else {
-                format!("PixieDust 未命中 {bssid}（固件不易感或目标无 WPS）")
-            });
-            let mut all = st.pixie_out.lock().unwrap();
-            all.retain(|x| x.bssid != p.bssid);
-            all.push(p);
+                events::global().push(format!("PixieDust 未命中 {bssid}（固件不易感或目标无 WPS）"));
+            }
+            let _ = crate::session::record_hit(&config::ensure_logs_dir(), p.clone());
+            *st.pixie_out.lock().unwrap() =
+                crate::session::load_hits(&config::ensure_logs_dir());
         }
         Err(e) => events::global().push(format!("PixieDust 失败: {e:#}")),
     }
@@ -957,6 +958,9 @@ pub fn start(cfg: Config) -> Result<()> {
             std::thread::sleep(Duration::from_secs(10));
         });
     }
+
+    // Load persisted PixieDust hits so the UI shows them across restarts.
+    *state.pixie_out.lock().unwrap() = crate::session::load_hits(&logs_dir);
 
     let addr = start_server(state.clone())?;
     let url = format!("http://{addr}/");

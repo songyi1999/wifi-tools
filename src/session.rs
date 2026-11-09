@@ -260,3 +260,48 @@ pub fn scope_caps(root: &Path, scope: &str, acng_bin: Option<&Path>) -> Result<(
     files.dedup();
     Ok((files, skipped, label))
 }
+
+// ── PixieDust hit persistence ───────────────────────────────────────────────
+
+pub fn hits_path(logs_dir: &Path) -> PathBuf {
+    logs_dir.join("hits.json")
+}
+
+/// Load all recorded hits (newest first).
+pub fn load_hits(logs_dir: &Path) -> Vec<crate::wslattack::PixieOut> {
+    std::fs::read_to_string(hits_path(logs_dir))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+/// Dedup by BSSID (newest wins), persist JSON + a human-readable txt.
+pub fn record_hit(logs_dir: &Path, mut hit: crate::wslattack::PixieOut) -> Result<()> {
+    if hit.time.is_empty() {
+        hit.time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    }
+    let mut hits = load_hits(logs_dir);
+    hits.retain(|h| h.bssid != hit.bssid);
+    hits.insert(0, hit);
+    save_hits(logs_dir, &hits)
+}
+
+pub fn save_hits(logs_dir: &Path, hits: &[crate::wslattack::PixieOut]) -> Result<()> {
+    std::fs::create_dir_all(logs_dir)?;
+    let json = serde_json::to_string_pretty(hits)?;
+    std::fs::write(hits_path(logs_dir), json)?;
+
+    let mut txt = String::from("PixieDust 命中记录\n============\n");
+    for h in hits {
+        txt.push_str(&format!(
+            "\n[{}] {} ({})\n  PIN = {}\n  PSK = {}\n",
+            h.time,
+            h.essid.as_deref().unwrap_or("(未知SSID)"),
+            h.bssid,
+            h.pin.as_deref().unwrap_or("(无)"),
+            h.psk.as_deref().unwrap_or("(无)")
+        ));
+    }
+    std::fs::write(logs_dir.join("hits.txt"), txt)?;
+    Ok(())
+}

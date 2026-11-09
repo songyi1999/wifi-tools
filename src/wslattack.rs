@@ -5,7 +5,7 @@
 //! Capture files are written straight to the Windows logs/caps dir via /mnt/e.
 
 use anyhow::{bail, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -35,11 +35,18 @@ pub struct Ap {
     pub essid: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PixieOut {
     pub bssid: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub essid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub psk: Option<String>,
+    #[serde(default)]
+    pub time: String,
+    #[serde(default)]
     pub tail: String,
 }
 
@@ -385,8 +392,10 @@ echo __ONEShot_DONE__"#,
         .collect();
     Ok(PixieOut {
         bssid: bssid.to_string(),
+        essid: None,
         pin,
         psk,
+        time: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
         tail: tail.chars().take(1500).collect(),
     })
 }

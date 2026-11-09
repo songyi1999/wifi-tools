@@ -33,6 +33,7 @@
   #log { height:380px; overflow-y:auto; background:#1b1e23; color:#c9d1d9; font:12px/1.55 Consolas,monospace; border-radius:6px; padding:8px 10px; white-space:pre-wrap; word-break:break-all; }
   .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:6px 0; }
   .kv { color:var(--mut); }
+  .hitrow td { background:#eafaee; }
   details summary { cursor:pointer; color:var(--mut); }
   .field { margin:6px 0; }
   .field label { display:block; font-size:12px; color:var(--mut); margin-bottom:2px; }
@@ -89,6 +90,7 @@
       <li>对目标行点「<b>PIN</b>」= PixieDust 攻击：对易感固件的路由器秒级算出 PIN，<b>零失败次数、不触发锁定</b>——这是唯一的 WPS 攻击方式（盲试 PIN 会锁死路由器 WPS，已移除）。命中后 PIN/PSK 直接显示。</li>
       <li>抓到握手包 → 右栏「爆破」跑字典。抓包期间目标网络需要有设备产生连接才有握手；可用另一台手机连一次目标 WiFi 触发。</li>
       <li><b>批量处理</b>：扫描结果行点「加入」把感兴趣的加进目标列表、点「删」排除不感兴趣/信号差的，然后点「批量 PIN（按目标列表）」或「批量 抓包（按目标列表）」自动逐个执行；「停止批量」在当前目标完成后中止。</li>
+      <li><b>命中结果怎么用</b>：PixieDust 命中后 PIN/PSK 会<b>自动保存</b>到卡片下方的「命中记录」表（也写入 logs\hits.json 和 hits.txt，重启不丢）。<b>PSK 就是该 WiFi 的密码</b>——任意设备连接该 SSID 时输入即可；PIN 用于 WPS 方式连接（很少用）。点行内「复制密码」直接进剪贴板。</li>
     </ol>
 
     <h2 style="font-size:15px; margin:14px 0 4px;">四、常见问题</h2>
@@ -424,12 +426,31 @@ function renderWslAps() {
   $('wslapwrap').innerHTML = `<table><tr><th>SSID</th><th>信号</th><th>ch</th><th>BSSID</th><th></th></tr>${rows}</table>`;
 }
 function renderPixie() {
-  if (!pixieOut || !pixieOut.length) { $('pixieres').innerHTML = ''; return; }
-  const hits = pixieOut.filter(p=>p.pin);
-  let html = hits.map(p=>`<div class="okmark">命中 ${p.bssid}: PIN=${p.pin} PSK=${p.psk ?? '(无)'}</div>`).join('');
-  const miss = pixieOut.filter(p=>!p.pin).map(p=>p.bssid);
-  if (miss.length) html += `<div class="kv">未命中: ${miss.join(', ')}</div>`;
-  $('pixieres').innerHTML = html;
+  const hits = (pixieOut || []).filter(p => p.pin);
+  const wrap = $('pixieres');
+  if (!hits.length) { wrap.innerHTML = ''; return; }
+  let rows = '';
+  for (const h of hits) {
+    const psk = h.psk ?? '';
+    rows += `<tr class="hitrow"><td>${h.time || ''}</td><td><b>${h.essid || '?'}</b></td>` +
+      `<td style="font-size:11px">${h.bssid}</td><td><b>${h.pin ?? '(无)'}</b></td>` +
+      `<td>${psk || '(无)'}</td>` +
+      `<td><button class="min" onclick="copyText(decodeURIComponent('${encodeURIComponent(psk)}'),'PSK')">复制密码</button> ` +
+      `<button class="min" onclick="copyText(decodeURIComponent('${encodeURIComponent(h.pin ?? '')}'),'PIN')">复制PIN</button></td></tr>`;
+  }
+  wrap.innerHTML =
+    `<div class="okmark" style="margin:6px 0 2px">命中 ${hits.length} 条（已自动保存 logs\hits.json / hits.txt）</div>` +
+    `<table><tr><th>时间</th><th>SSID</th><th>BSSID</th><th>PIN</th><th>PSK（=WiFi密码）</th><th></th></tr>${rows}</table>` +
+    `<div class="kv">用法：PSK 就是该 WiFi 的密码，任意设备连接该 SSID 时输入即可。</div>`;
+}
+function copyText(text, label) {
+  if (!text) return;
+  const done = () => pushLog(['已复制' + (label || '') + ': ' + text]);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => prompt('手动复制' + (label || '') + ':', text));
+  } else {
+    prompt('手动复制' + (label || '') + ':', text);
+  }
 }
 function hideAp(bssid) {
   jpost('/api/wsl/hide', {bssids:[bssid]}).catch(e=>pushLog(['[错误] '+e.message]));

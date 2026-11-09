@@ -48,6 +48,8 @@ enum Command {
         #[arg(long)]
         session: Option<String>,
     },
+    /// List saved PixieDust hits (logs/hits.json)
+    Hits,
     /// Manage dictionaries: list | update (download top-1M + password.lst)
     Dict { #[arg(default_value = "list")] action: String },
     /// Reconnect to a saved profile SSID (8 retries)
@@ -78,6 +80,7 @@ fn main() {
         Command::Capture => run_capture(cfg),
         Command::Crack { cap, dict, session } => run_crack(cfg, cap, dict, session),
         Command::Dict { action } => run_dict(cfg, &action),
+        Command::Hits => run_hits(),
         Command::Reconnect { ssid } => run_reconnect(&ssid),
         Command::ExportPasswords => run_export(),
     };
@@ -331,6 +334,27 @@ fn curl_download(dest: &Path, url: &str, min_bytes: u64) -> anyhow::Result<()> {
         }
     }
     anyhow::bail!("all mirrors failed for {}", url)
+}
+
+fn run_hits() -> i32 {
+    let logs_dir = config::ensure_logs_dir();
+    let hits = session::load_hits(&logs_dir);
+    if hits.is_empty() {
+        println!("尚无命中记录（logs/hits.json）");
+        return 0;
+    }
+    for h in &hits {
+        println!(
+            "[{}] {} ({})\n  PIN = {}\n  PSK = {}",
+            h.time,
+            h.essid.as_deref().unwrap_or("(未知SSID)"),
+            h.bssid,
+            h.pin.as_deref().unwrap_or("(无)"),
+            h.psk.as_deref().unwrap_or("(无)")
+        );
+    }
+    println!("\n共 {} 条 — PSK 即该 WiFi 的密码", hits.len());
+    0
 }
 
 fn run_dict(cfg: config::Config, action: &str) -> i32 {
