@@ -140,6 +140,20 @@ async fn api_crackscope(State(st): State<Arc<AppState>>, Json(req): Json<ScopeRe
 }
 
 #[derive(Deserialize)]
+struct TargetsReq {
+    list: Vec<String>,
+}
+
+/// In-memory targets sync: the frontend pushes the textarea content before
+/// starting any task, so unsaved edits still take effect immediately.
+async fn api_targets(State(st): State<Arc<AppState>>, Json(req): Json<TargetsReq>) -> Json<serde_json::Value> {
+    let n = req.list.len();
+    st.cfg.lock().unwrap().targets.list = req.list;
+    events::global().push(format!("目标列表已同步（{} 个，内存生效；「保存配置」才写入 config.toml）", n));
+    Json(json!({ "ok": true, "count": n }))
+}
+
+#[derive(Deserialize)]
 struct HideReq {
     bssids: Vec<String>,
 }
@@ -890,6 +904,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/wsl", get(api_wsl))
         .route("/api/wsl/hide", post(api_wsl_hide))
         .route("/api/crackscope", post(api_crackscope))
+        .route("/api/targets", post(api_targets))
         .route("/api/events", get(api_events))
         .route("/api/config", post(api_config_post))
         .route("/api/task", post(api_task))

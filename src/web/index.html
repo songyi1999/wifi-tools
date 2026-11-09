@@ -125,7 +125,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') document.get
 </script>
 <main>
   <div class="col left">
-    <h2>目标 SSID 列表（每行一个，WPS / 抓包共用）</h2>
+    <h2>目标 SSID 列表（每行一个 · <span id="targetcount">0</span> 个）</h2>
     <textarea id="targets" rows="5" spellcheck="false"></textarea>
     <hr>
     <h2>扫描附近网络（不断网）</h2>
@@ -223,6 +223,7 @@ function loadForm(c) {
   $('dict').value = c.crack.dict;
   $('dicts_dir').value = c.crack.dicts_dir;
   $('restore_ssid').value = c.restore.ssid || '';
+  updateTargetCount();
 }
 function readForm() {
   const c = JSON.parse(JSON.stringify(cfg));
@@ -456,10 +457,26 @@ function wslPixie(bssid, essid) {
   jpost('/api/task', {task:'wsl_pixie', bssid, essid}).catch(e=>pushLog(['[错误] '+e.message]));
 }
 
+function parseTargets() {
+  return [...new Set($('targets').value.split('
+').map(s=>s.trim()).filter(Boolean))];
+}
+function updateTargetCount() {
+  $('targetcount').textContent = parseTargets().length;
+}
+$('targets').addEventListener('input', updateTargetCount);
+// Push the textarea content to the server before starting any task so
+// unsaved edits take effect immediately (disk save stays manual).
+async function pushTargets() {
+  try { await jpost('/api/targets', { list: parseTargets() }); }
+  catch (e) { pushLog(['[错误] 目标列表同步失败: ' + e.message]); }
+}
 document.querySelectorAll('[data-task]').forEach(b => {
   b.addEventListener('click', async () => {
     const t = b.dataset.task;
     if (t === 'full' && !confirm('全流程会短暂断网扫描（结束自动恢复当前网络），继续？')) return;
+    if (t !== 'dict_xato' && t !== 'dict_rockyou') await pushTargets();
+    updateTargetCount();
     try { await jpost('/api/task', { task: t }); } catch (e) { pushLog(['[错误] ' + e.message]); }
   });
 });
