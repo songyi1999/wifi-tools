@@ -11,7 +11,6 @@ mod restore;
 mod scan;
 mod web;
 mod wlanapi;
-mod wps;
 mod wslattack;
 
 use clap::{Parser, Subcommand};
@@ -32,14 +31,12 @@ struct Cli {
 enum Command {
     /// Open the GUI (default when no subcommand)
     Gui,
-    /// Full pipeline unattended: scan -> wps -> capture -> crack -> restore
+    /// Full pipeline unattended: scan -> capture -> crack -> restore
     Run,
     /// Quick scan: trigger active scans + read refreshed list (never disconnects)
     Nets,
     /// Multi-round scan (writes scan_results.json)
     Scan,
-    /// WPS PIN probe against configured targets
-    Wps,
     /// airodump-ng capture per target
     Capture,
     /// Offline crack of logs/caps/*.cap, or a specific cap with `cap` (+`dict`, "-" = patterns)
@@ -71,7 +68,6 @@ fn main() {
         Command::Run => run_pipeline(cfg),
         Command::Nets => run_nets(),
         Command::Scan => run_scan(cfg),
-        Command::Wps => run_wps(cfg),
         Command::Capture => run_capture(cfg),
         Command::Crack { cap, dict } => run_crack(cfg, cap, dict),
         Command::Dict { action } => run_dict(cfg, &action),
@@ -155,22 +151,6 @@ fn run_scan(cfg: config::Config) -> i32 {
         }
         Err(e) => {
             tracing::error!("scan failed: {:#}", e);
-            1
-        }
-    }
-}
-
-fn run_wps(cfg: config::Config) -> i32 {
-    let logs_dir = config::ensure_logs_dir();
-    match wps::probe(&cfg.wps, &cfg.targets.list) {
-        Ok(res) => {
-            if let Err(e) = wps::save_result(&res, &logs_dir) {
-                tracing::error!("saving wps results: {:#}", e);
-            }
-            0
-        }
-        Err(e) => {
-            tracing::error!("wps failed: {:#}", e);
             1
         }
     }

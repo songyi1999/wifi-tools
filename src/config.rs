@@ -21,28 +21,6 @@ impl Default for TargetsCfg {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WpsCfg {
-    #[serde(default = "default_pins")]
-    pub pins: Vec<String>,
-    #[serde(default = "default_wps_timeout")]
-    pub timeout_sec: u64,
-}
-
-fn default_pins() -> Vec<String> {
-    vec!["12345670".into(), "12345678".into()]
-}
-
-fn default_wps_timeout() -> u64 {
-    20
-}
-
-impl Default for WpsCfg {
-    fn default() -> Self {
-        Self { pins: default_pins(), timeout_sec: default_wps_timeout() }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanCfg {
     #[serde(default = "default_scan_duration")]
     pub duration_sec: u64,
@@ -196,8 +174,6 @@ pub struct Config {
     #[serde(default)]
     pub targets: TargetsCfg,
     #[serde(default)]
-    pub wps: WpsCfg,
-    #[serde(default)]
     pub scan: ScanCfg,
     #[serde(default)]
     pub capture: CaptureCfg,
@@ -213,7 +189,6 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             targets: TargetsCfg { list: default_targets() },
-            wps: WpsCfg { pins: default_pins(), timeout_sec: default_wps_timeout() },
             scan: ScanCfg {
                 duration_sec: default_scan_duration(),
                 interval_sec: default_scan_interval(),

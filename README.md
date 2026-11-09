@@ -27,10 +27,9 @@ wifi-toolkit.exe           :: 或 wifi-toolkit.exe gui
 
 ### CLI
 ```bat
-wifi-toolkit.exe run                :: 全流程（无人值守，结束自动恢复原网络）
+wifi-toolkit.exe run                :: 全流程（扫描→抓包→爆破→恢复网络）
 wifi-toolkit.exe scan               :: 多轮扫描（读 config.toml）
 wifi-toolkit.exe nets               :: 快速扫描（触发主动扫描，不断网）
-wifi-toolkit.exe wps                :: WPS PIN 探测
 wifi-toolkit.exe capture            :: airodump-ng 抓包
 wifi-toolkit.exe crack              :: 爆破 logs\caps\ 下全部 .cap
 wifi-toolkit.exe crack <cap> <dict> :: 指定 cap 和字典；dict 为 - 时用内置模式字典
@@ -57,7 +56,6 @@ stdin 模式会先用 `aircrack-ng <cap>` 自动探测目标 BSSID（`-w -` 要�
 ## 配置（config.toml）
 
 - `[targets] list` — WPS / 抓包共用的 SSID 目标列表（支持部分匹配：`tp3-204` 可匹配 `3--204`）
-- `[wps] pins` — PIN 候选列表
 - `[scan] disconnect_first` — 扫描前短暂断网（能看到更多 AP）
 - `[crack] dict / dicts_dir / use_patterns / full8` — 字典与爆破模式（见「离线爆破」）
 - `[restore] ssid` — 留空 = 运行前自动记住当前网络

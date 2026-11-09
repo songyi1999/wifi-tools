@@ -152,7 +152,6 @@ async fn api_task(
     let ok = match req.task.as_str() {
         "quick_scan" => AppState::spawn_task(&st, "快速扫描", |s| task_quick_scan(s)),
         "scan" => AppState::spawn_task(&st, "深度扫描", |s| task_scan(s)),
-        "wps" => AppState::spawn_task(&st, "WPS 探测", |s| task_wps(s)),
         "capture" => AppState::spawn_task(&st, "抓包", |s| task_capture(s)),
         "crack" => AppState::spawn_task(&st, "爆破", |s| task_crack(s)),
         "export" => AppState::spawn_task(&st, "导出密码", |s| task_export(s)),
@@ -216,19 +215,6 @@ fn task_scan(st: Arc<AppState>) {
             }
         }
         Err(e) => events::global().push(format!("扫描失败: {e:#}")),
-    }
-}
-
-fn task_wps(st: Arc<AppState>) {
-    let cfg = st.cfg.lock().unwrap().clone();
-    let logs_dir = config::ensure_logs_dir();
-    match crate::wps::probe(&cfg.wps, &cfg.targets.list) {
-        Ok(res) => {
-            if let Err(e) = crate::wps::save_result(&res, &logs_dir) {
-                events::global().push(format!("保存结果失败: {e:#}"));
-            }
-        }
-        Err(e) => events::global().push(format!("WPS 探测失败: {e:#}")),
     }
 }
 

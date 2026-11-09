@@ -6,10 +6,6 @@
 # Target SSID list (supports partial matching, e.g. "tp3-204" matches "3--204")
 list = ["318", "tp3-204", "huawei-303"]
 
-[wps]
-# WPS PIN candidates (8 digits each)
-pins = ["12345670", "12345678"]
-timeout_sec = 20
 
 [scan]
 duration_sec = 90

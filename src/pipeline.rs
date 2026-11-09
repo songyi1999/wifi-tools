@@ -1,5 +1,5 @@
 //! Pipeline: full flow with guaranteed restore.
-//! record SSID -> scan -> wps -> capture -> crack -> [RestoreGuard Drop] restore.
+//! record SSID -> scan -> capture -> crack -> [RestoreGuard Drop] restore.
 
 use anyhow::Result;
 use serde::Serialize;
@@ -16,7 +16,6 @@ pub struct PipelineSummary {
     pub restored: bool,
     pub elapsed_sec: u64,
     pub scan_ssids: Option<usize>,
-    pub wps_cracked: Vec<String>,
     pub crack_found: Vec<String>,
 }
 
@@ -56,23 +55,13 @@ pub fn run_full(cfg: &Config, logs_dir: &Path, tx: Option<&EventTx>) -> Result<P
 
     let result = (|| -> Result<()> {
         // Step 1: scan
-        emit(tx, "[step 1/5] scan ...");
+        emit(tx, "[step 1/4] scan ...");
         let scan_res = crate::scan::scan(&cfg.scan, Some(&original))?;
         summary.scan_ssids = Some(scan_res.total_ssids);
         crate::scan::save_result(&scan_res, &logs_dir)?;
 
-        // Step 2: WPS probe
-        emit(tx, "[step 2/5] WPS PIN probe ...");
-        let wps_res = crate::wps::probe(&cfg.wps, &cfg.targets.list)?;
-        for (t, r) in &wps_res.targets {
-            if r.cracked == Some(true) {
-                summary.wps_cracked.push(t.clone());
-            }
-        }
-        crate::wps::save_result(&wps_res, &logs_dir)?;
-
-        // Step 3: capture
-        emit(tx, "[step 3/5] airodump capture ...");
+        // Step 2: capture
+        emit(tx, "[step 2/4] airodump capture ...");
         let caps_dir = crate::capture::caps_dir(&logs_dir);
         let cap_res = crate::capture::capture(
             &cfg.capture,
@@ -83,7 +72,7 @@ pub fn run_full(cfg: &Config, logs_dir: &Path, tx: Option<&EventTx>) -> Result<P
         crate::capture::save_result(&cap_res, &logs_dir)?;
 
         // Step 4: crack
-        emit(tx, "[step 4/5] offline crack ...");
+        emit(tx, "[step 3/4] offline crack ...");
         let dicts = cfg.effective_dicts();
         if !dicts.is_empty() || cfg.crack.use_patterns {
             let crack_res = crate::crack::crack_caps(
@@ -102,7 +91,7 @@ pub fn run_full(cfg: &Config, logs_dir: &Path, tx: Option<&EventTx>) -> Result<P
             }
             crate::crack::save_result(&crack_res, &logs_dir)?;
         } else {
-            emit(tx, "[step 4/5] no dictionaries found — skipping crack");
+            emit(tx, "[step 3/4] no dictionaries found — skipping crack");
         }
         Ok(())
     })();
@@ -112,7 +101,7 @@ pub fn run_full(cfg: &Config, logs_dir: &Path, tx: Option<&EventTx>) -> Result<P
     }
 
     // Explicit restore while we can still log the outcome.
-    emit(tx, "[step 5/5] restoring connection ...");
+    emit(tx, "[step 4/4] restoring connection ...");
     let ok = crate::restore::reconnect(&original)?;
     tracing::info!("explicit restore result: {}", ok);
     std::thread::sleep(std::time::Duration::from_secs(3));

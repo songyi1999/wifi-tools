@@ -144,17 +144,6 @@ pub fn connect(name: &str) -> Result<NetshOutput> {
     run_netsh(&["wlan", "connect", &format!("name={}", name)])
 }
 
-/// Connect via WPS PIN: `netsh wlan connect name=<ssid> auth=wpspin key=<pin>`
-pub fn connect_wpspin(name: &str, pin: &str) -> Result<NetshOutput> {
-    run_netsh(&[
-        "wlan",
-        "connect",
-        &format!("name={}", name),
-        "auth=wpspin",
-        &format!("key={}", pin),
-    ])
-}
-
 pub fn disconnect() -> Result<NetshOutput> {
     run_netsh(&["wlan", "disconnect"])
 }
