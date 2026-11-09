@@ -458,8 +458,7 @@ function wslPixie(bssid, essid) {
 }
 
 function parseTargets() {
-  return [...new Set($('targets').value.split('
-').map(s=>s.trim()).filter(Boolean))];
+  return [...new Set($('targets').value.split('\n').map(s=>s.trim()).filter(Boolean))];
 }
 function updateTargetCount() {
   $('targetcount').textContent = parseTargets().length;
