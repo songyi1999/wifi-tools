@@ -33,6 +33,7 @@ pub struct AppState {
     pub stop: std::sync::atomic::AtomicBool,
     pub wsl_iface: Mutex<Option<String>>,
     pub wsl_adapter: Mutex<String>,
+    pub wsl_state: Mutex<String>,
     pub wsl_aps: Mutex<Vec<Ap>>,
     pub pixie_out: Mutex<Vec<PixieOut>>,
 }
@@ -52,6 +53,7 @@ impl AppState {
             stop: std::sync::atomic::AtomicBool::new(false),
             wsl_iface: Mutex::new(None),
             wsl_adapter: Mutex::new("未检测".into()),
+            wsl_state: Mutex::new("unknown".into()),
             wsl_aps: Mutex::new(Vec::new()),
             pixie_out: Mutex::new(Vec::new()),
         }
@@ -110,6 +112,7 @@ async fn api_networks(State(st): State<Arc<AppState>>) -> Json<serde_json::Value
 
 async fn api_wsl(State(st): State<Arc<AppState>>) -> Json<serde_json::Value> {
     Json(json!({
+        "state": st.wsl_state.lock().unwrap().clone(),
         "adapter": st.wsl_adapter.lock().unwrap().clone(),
         "iface": st.wsl_iface.lock().unwrap().clone(),
         "aps": st.wsl_aps.lock().unwrap().clone(),
@@ -451,6 +454,39 @@ fn task_dict(st: Arc<AppState>, rockyou: bool) {
 
 // ── WSL hardware tasks ──────────────────────────────────────────────────────
 
+/// Derived hardware state machine:
+/// missing / msc / wlan_detached / wlan_pending (attached, no iface) / ready
+fn wsl_state_summary(distro: &str) -> (&'static str, String, Option<String>) {
+    match wslattack::adapter() {
+        None => ("missing", "未检测到网卡（请插入 Tenda U2）".into(), None),
+        Some(a) => match a.mode {
+            AdapterMode::Msc => (
+                "msc",
+                format!("{} [U盘模式{}]", a.busid, if a.attached { "|已挂WSL" } else { "" }),
+                None,
+            ),
+            AdapterMode::Wlan => {
+                if !a.attached {
+                    ("wlan_detached", format!("{} [WiFi模式|未接入]", a.busid), None)
+                } else {
+                    match wslattack::find_iface(distro) {
+                        Some(i) => (
+                            "ready",
+                            format!("{} [已就绪|{} 监听中]", a.busid, i),
+                            Some(i),
+                        ),
+                        None => (
+                            "wlan_pending",
+                            format!("{} [WiFi模式|待激活监听]", a.busid),
+                            None,
+                        ),
+                    }
+                }
+            }
+        },
+    }
+}
+
 fn wsl_adapter_summary() -> String {
     match wslattack::adapter() {
         None => "未检测到（请插入网卡）".into(),
@@ -472,8 +508,13 @@ fn wsl_adapter_summary() -> String {
 }
 
 fn task_wsl_attach(st: Arc<AppState>) {
-    *st.wsl_adapter.lock().unwrap() = wsl_adapter_summary();
     let distro = st.cfg.lock().unwrap().wsl.distro.clone();
+    let (state, summary, wiface) = wsl_state_summary(&distro);
+    *st.wsl_state.lock().unwrap() = state.into();
+    *st.wsl_adapter.lock().unwrap() = summary;
+    if wiface.is_some() {
+        *st.wsl_iface.lock().unwrap() = wiface;
+    }
 
     // Fast path: already attached and an interface exists — nothing to do.
     if let Some(iface) = wslattack::find_iface(&distro) {
@@ -574,7 +615,9 @@ fn task_wsl_attach(st: Arc<AppState>) {
     match wslattack::up_monitor(&distro, &iface) {
         Ok(()) => {
             *st.wsl_iface.lock().unwrap() = Some(iface.clone());
-            *st.wsl_adapter.lock().unwrap() = wsl_adapter_summary();
+            let (state, summary, _) = wsl_state_summary(&distro);
+            *st.wsl_state.lock().unwrap() = state.into();
+            *st.wsl_adapter.lock().unwrap() = summary;
             events::global().push(format!("网卡就绪：{iface} 已进监听模式"));
         }
         Err(e) => events::global().push(format!("监听模式失败: {e:#}")),
@@ -716,7 +759,13 @@ pub fn start(cfg: Config) -> Result<()> {
                 if let Ok(i) = netsh::show_interface() {
                     *st.iface.lock().unwrap() = Some(i);
                 }
-                *st.wsl_adapter.lock().unwrap() = wsl_adapter_summary();
+                let distro = st.cfg.lock().unwrap().wsl.distro.clone();
+                let (state, summary, wiface) = wsl_state_summary(&distro);
+                *st.wsl_state.lock().unwrap() = state.into();
+                *st.wsl_adapter.lock().unwrap() = summary;
+                if wiface.is_some() {
+                    *st.wsl_iface.lock().unwrap() = wiface;
+                }
             }
             std::thread::sleep(Duration::from_secs(10));
         });

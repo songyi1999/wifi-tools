@@ -319,12 +319,24 @@ async function refreshIface() {
 
 function renderWsl() {
   fetch('/api/wsl').then(r=>r.json()).then(d => {
-    const s = $('wslstatus');
-    s.textContent = d.adapter;
-    s.className = 'pill' + (d.iface ? ' ok' : '');
+    const pill = $('wslstatus'), ab = document.getElementById('wslattach');
+    const busy = $('busy').textContent !== '空闲';
+    let btn = '接入网卡（含U盘切换/进监听）', dis = false, ok = false, tip = '';
+    switch (d.state) {
+      case 'ready':         btn = '网卡已就绪（监听中）'; dis = !busy; ok = true; tip = '网卡已就绪，无需重复接入'; break;
+      case 'missing':       btn = '未检测到网卡'; dis = true; tip = '请插入 Tenda U2 USB 网卡'; break;
+      case 'msc':           btn = '一键切换 U盘→监听'; tip = '将自动弹出伪U盘并进入监听模式'; break;
+      case 'wlan_pending':  btn = '激活监听模式'; tip = '网卡已接入，还需加载驱动进监听（很快，一般不弹窗）'; break;
+      case 'wlan_detached': btn = '接入网卡'; tip = '将把网卡接入 WSL'; break;
+    }
+    pill.textContent = d.adapter;
+    pill.className = 'pill' + (ok ? ' ok' : '');
     $('wsliface').textContent = d.iface ? `接口: ${d.iface}（监听模式）` : '';
-    const ab = document.getElementById('wslattach');
-    if (ab) { ab.disabled = !!d.iface; ab.title = d.iface ? '网卡已就绪，无需重复接入' : ''; }
+    if (ab) {
+      ab.disabled = dis || busy;
+      ab.textContent = btn;
+      ab.title = tip;
+    }
     if (JSON.stringify(d.aps) !== JSON.stringify(wslAps)) {
       wslAps = d.aps;
       renderWslAps();
