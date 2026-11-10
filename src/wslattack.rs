@@ -185,17 +185,18 @@ pub fn load_driver(distro: &str) -> Result<()> {
     // Self-healing: if modprobe fails (modules wiped by an apt operation etc.),
     // redeploy from the E:\WSL\kernelic8800 backup, depmod, retry.
     let script = r#"
+# self-heal targets the RUNNING kernel (WSL auto-updates may change it)
 modprobe aic8800_fdrv 2>/dev/null && lsmod | grep -q aic8800_fdrv && { echo LOADED; exit 0; }
 BK=/mnt/e/WSL/kernel/aic8800
+KVER=$(uname -r)
 if [ -f "$BK/aic8800_fdrv.ko" ]; then
-  KVER=6.18.54.1-microsoft-standard-WSL2
   mkdir -p /lib/modules/$KVER/kernel/drivers/net/wireless/aic8800
   cp -f $BK/*.ko /lib/modules/$KVER/kernel/drivers/net/wireless/aic8800/
   [ -d /lib/firmware/aic8800DC ] || cp -r $BK/aic8800DC /lib/firmware/
   depmod -a $KVER 2>/dev/null
   modprobe aic8800_fdrv 2>/dev/null && lsmod | grep -q aic8800_fdrv && { echo REDEPLOYED; exit 0; }
 fi
-echo LOAD_FAIL
+echo "LOAD_FAIL: 模块与运行内核 $(uname -r) 不匹配 — WSL 内核可能已自动升级，需要重新编译驱动"
 "#;
     let out = kali(distro, script)?;
     if out.contains("LOADED") {

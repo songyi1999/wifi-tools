@@ -64,7 +64,8 @@
 
     <h2 style="font-size:15px; margin:14px 0 4px;">一、快速上手（3 步）</h2>
     <ol style="margin:4px 0; padding-left:22px;">
-      <li><b>扫描</b>：点左栏「扫描网卡」列出附近 AP（不断网）；或插上监听网卡后点「WSL 扫描」。</li>
+      <li><b>准备</b>：插上 Tenda U2 监听网卡；硬件攻击卡片里点「1 接入网卡」，等状态变绿「已就绪·监听中」（按钮会自动禁用，防止误操作）。</li>
+      <li><b>扫描</b>：点左栏「扫描网卡」列出附近 AP（不断网）；或插上监听网卡后点「2 WSL 扫描」。</li>
       <li><b>选目标</b>：在扫描结果行点「+加入」，或直接在上面的目标列表文本框里输入 SSID（每行一个）。</li>
       <li><b>执行</b>：右栏「深度扫描」或硬件攻击里「WSL 扫描」列出目标 → 对目标点「PIN」(PixieDust) 或「抓包」→ 抓到握手包后点「爆破」。</li>
     </ol>
@@ -72,11 +73,12 @@
     <h2 style="font-size:15px; margin:14px 0 4px;">二、各功能区说明</h2>
     <table style="width:100%; border-collapse:collapse; font-size:13px;">
       <tr><th style="text-align:left; padding:4px 8px; background:#eef1f4;">区域</th><th style="text-align:left; padding:4px 8px; background:#eef1f4;">作用</th></tr>
-      <tr><td style="padding:4px 8px;">目标 SSID 列表</td><td style="padding:4px 8px;">全流程共用的目标。支持部分匹配（"tp3-204" 能匹配 "3--204"）。改完记得「保存配置」。</td></tr>
+      <tr><td style="padding:4px 8px;">目标 SSID 列表</td><td style="padding:4px 8px;">批量任务的目标。支持部分匹配（"tp3-204" 能匹配 "3--204"）。<b>点任何任务按钮时会自动同步文本框当前内容</b>（无需先保存）；「保存配置」用于持久化到 config.toml（重启后还在）。</td></tr>
       <tr><td style="padding:4px 8px;">扫描附近网络</td><td style="padding:4px 8px;">走 Windows netsh，读缓存 + 4 轮主动触发扫描。<b>不断网</b>，但连接状态下远端弱信号 AP 可能看不到。</td></tr>
-      <tr><td style="padding:4px 8px;">硬件攻击（WSL）</td><td style="padding:4px 8px;">走 Kali WSL + Tenda U2 监听网卡，能力最强：真监听扫描、定向抓握手包、PixieDust。需要网卡已插入 USB。</td></tr>
+      <tr><td style="padding:4px 8px;">硬件攻击（WSL）</td><td style="padding:4px 8px;">走 Kali WSL + Tenda U2 监听网卡，能力最强：真监听扫描、定向抓握手包、PixieDust。按钮按 1→2→3 步骤门控，灰的表示前置步骤未完成。需要网卡已插入 USB。</td></tr>
       <tr><td style="padding:4px 8px;">深度扫描</td><td style="padding:4px 8px;">右栏按钮。默认先短暂断网再扫（能看到更多弱 AP），扫完自动重连。耗时 = 高级设置里的扫描时长。</td></tr>
-      <tr><td style="padding:4px 8px;">抓包 / 爆破</td><td style="padding:4px 8px;">「抓包」是 Windows airodump（内置网卡不支持，会报 not supported，<b>请用硬件攻击里的抓包</b>）；「爆破」对 logs\caps\ 下所有 .cap 跑字典（模式字典 → rockyou → xato100万），命中即停。</td></tr>
+      <tr><td style="padding:4px 8px;">抓包 / 爆破</td><td style="padding:4px 8px;">「抓包」是 Windows airodump（内置网卡不支持，请用硬件攻击里的抓包）；「爆破」按右栏「爆破范围」下拉框执行——默认「本次抓包（最新会话）」，自动跳过没抓到握手的 cap，可切换全部/指定会话。</td></tr>
+      <tr><td style="padding:4px 8px;">命中记录</td><td style="padding:4px 8px;">PixieDust 命中自动保存（logs\hits.json / hits.txt，重启不丢），表格含信号强度与「复制密码」按钮。<b>PSK 就是该 WiFi 的密码</b>。</td></tr>
       <tr><td style="padding:4px 8px;">导出密码</td><td style="padding:4px 8px;">导出本机已保存的所有 WiFi profile 密码到 logs\passwords_export.txt。</td></tr>
       <tr><td style="padding:4px 8px;">运行全流程</td><td style="padding:4px 8px;">无人值守：记住当前网络 → 深度扫描 → 抓包 → 爆破 → 自动恢复原网络。结束状态在右栏显示「网络恢复：是/否」。WPS 攻击请单独用硬件攻击卡片（PixieDust，零失败次数不触发锁定）。</td></tr>
     </table>
@@ -86,7 +88,8 @@
       <li>网卡插 USB（第一次插 Windows 会识别为 U 盘模式，属正常）。</li>
       <li>点「接入网卡」：自动完成 U盘弹出切换 → 接入 WSL → 加载驱动 → 进监听模式。过程中可能弹 <b>UAC 管理员确认，请点「是」</b>。</li>
       <li>点「WSL 扫描」列出 AP（信号彩色排序）。</li>
-      <li>对目标行点「<b>抓包</b>」= 定向监听该路由器 120 秒，等有设备连接时抓握手包；抓到后 logs\caps\ 出现 .cap 文件。</li>
+      <li>对目标行点「<b>抓包</b>」= 定向监听该路由器（默认 120 秒，可在高级设置调大到 600s 守候自然重连）。抓完自动检查握手：抓到会提示「抓到握手包！」，没抓到会如实说明（只有 beacon 跑字典也无效）。</li>
+      <li>每次「批量抓包」是一个独立<b>会话</b>（logs\caps\日期时间\），互不混淆；右栏「爆破范围」默认只打最新一次，可切全部。</li>
       <li>对目标行点「<b>PIN</b>」= PixieDust 攻击：对易感固件的路由器秒级算出 PIN，<b>零失败次数、不触发锁定</b>——这是唯一的 WPS 攻击方式（盲试 PIN 会锁死路由器 WPS，已移除）。命中后 PIN/PSK 直接显示。</li>
       <li>抓到握手包 → 右栏「爆破」跑字典。抓包期间目标网络需要有设备产生连接才有握手；可用另一台手机连一次目标 WiFi 触发。</li>
       <li><b>批量处理</b>：扫描结果行点「加入」把感兴趣的加进目标列表、点「删」排除不感兴趣/信号差的，然后点「批量 PIN（按目标列表）」或「批量 抓包（按目标列表）」自动逐个执行；「停止批量」在当前目标完成后中止。</li>
@@ -102,6 +105,9 @@
       <li><b>断网了？</b>深度扫描会短暂断网并自动恢复；如果显示「网络恢复：否」，点右上「刷新状态」，或手动重连原 WiFi。</li>
       <li><b>抓包文件在哪？</b>logs\caps\ 下，文件名 = SSID_BSSID前4位。字典在 E:\project\wifi-toolkit\dicts\（可点下载按钮补齐）。</li>
       <li><b>PIN 一直不中？</b>PixieDust 只对易感固件有效（联发科/瑞昱老固件居多）；未命中会记录在卡片下方。</li>
+      <li><b>批量只跑了几个旧目标？</b>旧版 bug，已修：现在点任务前自动同步文本框列表（灰色按钮=前置步骤未完成，按编号 1→2→3 来）。</li>
+      <li><b>WSL/Windows 自动更新后网卡激活失败（驱动加载失败）？</b>WSL 升级会换内核，旧编译的模块失配。点「接入网卡」会自动从备份重部署匹配模块；若提示需要重编，说明系统又升级了内核版本，需重新编译一次驱动（开发者操作）。</li>
+      <li><b>连接命中目标报"无法连接"？</b>多半是信号太弱（命中记录表有信号列，低于 -75dBm 会标红警告）。密码没错，靠近 AP 或把设备移过去再连。</li>
     </ul>
 
     <h2 style="font-size:15px; margin:14px 0 4px;">五、文件与日志</h2>
@@ -111,6 +117,8 @@
       <tr><td style="padding:3px 8px;">logs\crack_results.json</td><td style="padding:3px 8px;">爆破结果</td></tr>
       <tr><td style="padding:3px 8px;">logs\caps\</td><td style="padding:3px 8px;">握手包 .cap 文件</td></tr>
       <tr><td style="padding:3px 8px;">logs\passwords_export.txt</td><td style="padding:3px 8px;">本机已存密码导出表</td></tr>
+      <tr><td style="padding:3px 8px;">logs\hits.json / hits.txt</td><td style="padding:3px 8px;">PixieDust 命中记录（重启不丢，可转发）</td></tr>
+      <tr><td style="padding:3px 8px;">logs\caps\日期时间\</td><td style="padding:3px 8px;">每次批量抓包的独立会话目录（含握手清单 manifest.json）</td></tr>
       <tr><td style="padding:3px 8px;">E:\WSL\使用说明.md</td><td style="padding:3px 8px;">Kali WSL 环境的详细文档</td></tr>
     </table>
 
