@@ -586,7 +586,7 @@ fn wsl_state_summary(distro: &str) -> (&'static str, String, Option<String>) {
         return ("ready", format!("{} [已就绪|{} 监听中]", desc, i), Some(i));
     }
     match wslattack::adapter() {
-        None => ("missing", "未检测到网卡（请插入 Tenda U2）".into(), None),
+        None => ("missing", "未检测到监听网卡".into(), None),
         Some(a) => match a.mode {
             AdapterMode::Msc => (
                 "msc",
@@ -655,7 +655,7 @@ fn task_wsl_attach(st: Arc<AppState>) {
     // handled naturally. 3 rounds is enough for any realistic sequence.
     'rounds: for round in 1..=3 {
         let Some(info) = wslattack::adapter() else {
-            events::global().push("未检测到 AIC 网卡 — 请插入 Tenda U2");
+            events::global().push("未检测到监听网卡 — 请插入 Tenda U2 (AIC8800) 或 RTL8812AU");
             return;
         };
         events::global().push(format!(

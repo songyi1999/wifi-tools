@@ -199,28 +199,37 @@ pub fn load_driver(distro: &str) -> Result<()> {
     // Self-healing: if modprobe fails (modules wiped by an apt operation etc.),
     // redeploy from the E:\WSL\kernelic8800 backup, depmod, retry.
     let script = r#"
-# self-heal targets the RUNNING kernel (WSL auto-updates may change it)
-modprobe aic8800_fdrv 2>/dev/null && lsmod | grep -q aic8800_fdrv && { echo LOADED; exit 0; }
-BK=/mnt/e/WSL/kernel/aic8800
+LOADED_ANY=0
+for m in aic8800_fdrv 88XXau_wfb; do
+  modprobe $m 2>/dev/null && lsmod | grep -q $m && { echo "LOADED:$m"; LOADED_ANY=1; }
+done
+[ "$LOADED_ANY" = 1 ] && exit 0
 KVER=$(uname -r)
-if [ -f "$BK/aic8800_fdrv.ko" ]; then
+# AIC8800 (Tenda U2) backup
+BK=/mnt/e/WSL/kernel/aic8800
+if [ -f "$BK/aic8800_fdrv.ko" ] && lsusb 2>/dev/null | grep -qi '2604:0014\|a69c:5721'; then
   mkdir -p /lib/modules/$KVER/kernel/drivers/net/wireless/aic8800
   cp -f $BK/*.ko /lib/modules/$KVER/kernel/drivers/net/wireless/aic8800/
   [ -d /lib/firmware/aic8800DC ] || cp -r $BK/aic8800DC /lib/firmware/
   depmod -a $KVER 2>/dev/null
-  modprobe aic8800_fdrv 2>/dev/null && lsmod | grep -q aic8800_fdrv && { echo REDEPLOYED; exit 0; }
+  modprobe aic8800_fdrv 2>/dev/null && lsmod | grep -q aic8800_fdrv && { echo "REDEPLOYED:aic8800"; LOADED_ANY=1; }
 fi
-echo "LOAD_FAIL: 模块与运行内核 $(uname -r) 不匹配 — WSL 内核可能已自动升级，需要重新编译驱动"
+# RTL8812AU backup
+BK2=/mnt/e/WSL/kernel/rtl8812au-58
+if [ -f "$BK2/88XXau_wfb.ko" ] && lsusb 2>/dev/null | grep -qi '0bda:8812'; then
+  mkdir -p /lib/modules/$KVER/kernel/drivers/net/wireless/rtl8812au
+  cp -f $BK2/88XXau_wfb.ko /lib/modules/$KVER/kernel/drivers/net/wireless/rtl8812au/
+  depmod -a $KVER 2>/dev/null
+  modprobe 88XXau_wfb 2>/dev/null && lsmod | grep -q 88XXau_wfb && { echo "REDEPLOYED:88XXau_wfb"; LOADED_ANY=1; }
+fi
+[ "$LOADED_ANY" = 1 ] && exit 0
+echo "LOAD_FAIL: 没有匹配当前插入网卡的已编译模块"
 "#;
     let out = kali(distro, script)?;
-    if out.contains("LOADED") {
+    if out.contains("LOADED") || out.contains("REDEPLOYED") {
         return Ok(());
     }
-    if out.contains("REDEPLOYED") {
-        tracing::info!("aic8800 modules redeployed from backup");
-        return Ok(());
-    }
-    bail!("aic8800_fdrv 加载失败（备份也失败）: {}", out.trim());
+    bail!("驱动加载失败: {}", out.trim());
 }
 
 /// Force-detach a stale usbipd attachment (e.g. after WSL VM restart).

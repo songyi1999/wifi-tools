@@ -379,7 +379,7 @@ function renderWsl() {
     let btn = '1 接入网卡', dis = false, ok = false, tip = '';
     switch (d.state) {
       case 'ready':         btn = '1 网卡已就绪（监听中）'; dis = true; ok = true; tip = '网卡已就绪，无需重复接入'; break;
-      case 'missing':       btn = '1 未检测到网卡'; dis = true; tip = '请插入 Tenda U2 USB 网卡'; break;
+      case 'missing':       btn = '1 未检测到网卡'; dis = true; tip = '请插入监听网卡 (Tenda U2 或 RTL8812AU)'; break;
       case 'msc':           btn = '1 接入网卡（U盘→监听 一键切换）'; tip = '将自动弹出伪U盘并进入监听模式'; break;
       case 'wlan_pending':  btn = '1 接入网卡（激活监听）'; tip = '网卡已接入，还需加载驱动进监听（很快，一般不弹窗）'; break;
       case 'wlan_detached': btn = '1 接入网卡'; tip = '将把网卡接入 WSL（未共享时会弹 UAC）'; break;
@@ -405,7 +405,7 @@ function renderWsl() {
     document.getElementById('wslstop').disabled = !busy;
     // next-step hint
     let hint = '';
-    if (d.state === 'missing') hint = '未检测到网卡，请插入 Tenda U2';
+    if (d.state === 'missing') hint = '未检测到监听网卡，请插入 USB 监听网卡';
     else if (!ready) hint = '第 1 步：接入网卡（完成后自动解锁第 2 步）';
     else if (!hasAps) hint = '第 2 步：WSL 扫描，列出附近 AP';
     else hint = '第 3 步：批量 PIN / 批量 抓包，或在下方逐行操作';
