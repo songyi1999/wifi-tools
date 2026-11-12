@@ -84,7 +84,10 @@ pub fn adapter() -> Option<AdapterInfo> {
             continue;
         }
         let is_msc = line.contains("a69c:5721");
-        let is_wlan = line.contains("2604:0014") || line.to_lowercase().contains("aic8800");
+        let is_wlan = line.contains("2604:0014")
+            || line.to_lowercase().contains("aic8800")
+            || line.contains("0bda:8812")
+            || line.to_lowercase().contains("8812au");
         if !(is_msc || is_wlan) {
             continue;
         }
@@ -188,7 +191,7 @@ pub fn find_iface(distro: &str) -> Option<String> {
 
 /// Is the WLAN-mode device visible inside Kali?
 pub fn has_device(distro: &str) -> bool {
-    kali(distro, "lsusb 2>/dev/null | grep -qi '2604:0014' && echo YES")
+    kali(distro, "lsusb 2>/dev/null | grep -qiE '2604:0014|0bda:8812' && echo YES")
         .map(|o| o.contains("YES"))
         .unwrap_or(false)
 }
