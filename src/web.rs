@@ -469,25 +469,30 @@ fn task_wsl_batch(st: Arc<AppState>, do_pin: bool) {
                 Err(e) => events::global().push(format!("    失败: {e:#}")),
             }
         } else {
-            match wslattack::capture(&distro, &iface, &ap.bssid, &ap.channel, &ap.essid, sec, std::path::Path::new(&caps_win)) {
-                Ok(file) => {
-                    ok_cnt += 1;
-                    let fname = std::path::Path::new(&file)
-                        .file_name()
-                        .map(|f| f.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    if !fname.is_empty() {
-                        let _ = crate::session::record_cap(
-                            &config::ensure_logs_dir().join("caps").join(&sess_rel),
-                            &fname, Some(&ap.essid), Some(&ap.bssid), Some(&ap.channel),
-                        );
-                    }
-                    events::global().push(format!("    抓包完成 -> {file}"));
+            let (cap, hs) = wslattack::capture_deauth(
+                &distro, &iface, &ap.bssid, &ap.channel, &ap.essid, sec,
+                std::path::Path::new(&caps_win), &acng_bin,
+            );
+            if let Some(file) = cap {
+                ok_cnt += 1;
+                let fname = std::path::Path::new(&file)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                if !fname.is_empty() {
+                    let _ = crate::session::record_cap(
+                        &config::ensure_logs_dir().join("caps").join(&sess_rel),
+                        &fname, Some(&ap.essid), Some(&ap.bssid), Some(&ap.channel),
+                    );
                 }
-                Err(e) => {
-                    fail_cnt += 1;
-                    events::global().push(format!("    抓包失败: {e:#}"));
+                if let Some(true) = hs {
+                    events::global().push(format!("    抓到握手包！-> {file}"));
+                } else {
+                    events::global().push(format!("    抓包完成（未含握手）-> {file}"));
                 }
+            } else {
+                fail_cnt += 1;
+                events::global().push("    抓包失败: 未产出 cap 文件".to_string());
             }
         }
         done += 1;
@@ -844,26 +849,28 @@ fn task_wsl_capture(st: Arc<AppState>, bssid: String, ch: String, essid: String)
     } else {
         caps_win.clone()
     };
-    events::global().push(format!("定向抓包 {essid} ({bssid} ch{ch}) {sec}s — 等待目标客户端产生握手…"));
-    match wslattack::capture(&distro, &iface, &bssid, &ch, &essid, sec, std::path::Path::new(&caps_win)) {
-        Ok(file) => {
-            let fname = std::path::Path::new(&file)
-                .file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_default();
-            if !fname.is_empty() {
-                let _ = crate::session::record_cap(
-                    &caps_root.join(&sess), &fname, Some(&essid), Some(&bssid), Some(&ch),
-                );
-                match crate::session::check_handshake(&acng_bin, &caps_root.join(&sess).join(&fname)) {
-                    Some(true) => events::global().push("  抓到握手包！可点右栏「爆破」"),
-                    Some(false) => events::global().push("  本次未抓到握手（只有 beacon）— 需要目标有设备重新连接"),
-                    None => {}
-                }
-            }
-            events::global().push(format!("抓包完成 -> {file}"));
+    events::global().push(format!("定向抓包+踢线辅助 {essid} ({bssid} ch{ch}) {sec}s…"));
+    let (cap, hs) = wslattack::capture_deauth(
+        &distro, &iface, &bssid, &ch, &essid, sec,
+        std::path::Path::new(&caps_win), &acng_bin,
+    );
+    if let Some(file) = cap {
+        let fname = std::path::Path::new(&file)
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if !fname.is_empty() {
+            let _ = crate::session::record_cap(
+                &caps_root.join(&sess), &fname, Some(&essid), Some(&bssid), Some(&ch),
+            );
         }
-        Err(e) => events::global().push(format!("抓包失败: {e:#}")),
+        match hs {
+            Some(true) => events::global().push(format!("  抓到握手包！-> {file}（可点右栏「爆破」）")),
+            Some(false) => events::global().push(format!("  抓包完成但未含握手 -> {file}")),
+            None => events::global().push(format!("抓包完成 -> {file}")),
+        }
+    } else {
+        events::global().push("抓包失败: 未产出 cap 文件".to_string());
     }
 }
 

