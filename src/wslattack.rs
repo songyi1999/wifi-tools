@@ -62,13 +62,27 @@ fn run(prog: &str, args: &[&str]) -> Result<String> {
 }
 
 /// usbipd list -> first matching AIC adapter (MSC or WLAN mode).
+/// Only the "Connected:" section is scanned: the "Persisted:" section lists
+/// GUIDs of old binds and would otherwise match "AIC8800DC" and produce a
+/// bogus adapter entry (GUID as busid, attached=false).
 pub fn adapter() -> Option<AdapterInfo> {
     let out = run(USBIPD, &["list"]).ok()?;
     let mut busid = None;
     let mut mode = None;
     let mut shared = false;
     let mut attached = false;
+    let mut in_connected = false;
     for line in out.lines() {
+        if line.starts_with("Connected:") {
+            in_connected = true;
+            continue;
+        }
+        if line.starts_with("Persisted:") {
+            break;
+        }
+        if !in_connected {
+            continue;
+        }
         let is_msc = line.contains("a69c:5721");
         let is_wlan = line.contains("2604:0014") || line.to_lowercase().contains("aic8800");
         if !(is_msc || is_wlan) {

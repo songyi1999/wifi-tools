@@ -576,6 +576,15 @@ fn task_dict(st: Arc<AppState>, rockyou: bool) {
 /// Derived hardware state machine:
 /// missing / msc / wlan_detached / wlan_pending (attached, no iface) / ready
 fn wsl_state_summary(distro: &str) -> (&'static str, String, Option<String>) {
+    // An existing monitor interface is the ground truth for "ready" —
+    // usbipd's Persisted section can make adapter() look "未接入" even
+    // while everything is up.
+    if let Some(i) = wslattack::find_iface(distro) {
+        let desc = wslattack::adapter()
+            .map(|a| a.busid)
+            .unwrap_or_else(|| "网卡".to_string());
+        return ("ready", format!("{} [已就绪|{} 监听中]", desc, i), Some(i));
+    }
     match wslattack::adapter() {
         None => ("missing", "未检测到网卡（请插入 Tenda U2）".into(), None),
         Some(a) => match a.mode {
