@@ -424,8 +424,15 @@ function renderWslAps() {
   if (!wslAps || !wslAps.length) { $('wslapwrap').innerHTML = '<span class="kv">（尚未 WSL 扫描）</span>'; return; }
   let rows = '';
   for (const a of wslAps) {
-    const cls = a.power >= -60 ? 'g' : (a.power >= -75 ? 'y' : 'r');
-    rows += `<tr><td>${a.essid}</td><td class="sig ${cls}">${a.power} dBm</td><td>${a.channel}</td>` +
+    let sigHtml = '';
+    const hasPower = a.power != null && a.power !== 0;
+    if (hasPower) {
+      const cls = a.power >= -60 ? 'g' : (a.power >= -75 ? 'y' : 'r');
+      sigHtml = `<td class="sig ${cls}">${a.power} dBm</td>`;
+    } else {
+      sigHtml = `<td class="kv" title="当前驱动（88XXau_wfb）不回报 RSSI；要测信号用 Tenda U2 扫描">无数据</td>`;
+    }
+    rows += `<tr><td>${a.essid}</td>${sigHtml}<td>${a.channel}</td>` +
       `<td style="font-size:11px">${a.bssid}</td>` +
       `<td><button class="min" onclick="wslCap('${a.bssid}','${a.channel}','${a.essid.replace(/'/g,"\\'")}')">抓包</button> ` +
       `<button class="min" onclick="wslPixie('${a.bssid}','${a.essid.replace(/'/g,"\\'")}')">PIN</button> ` +

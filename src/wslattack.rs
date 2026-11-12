@@ -298,7 +298,8 @@ pub fn parse_ap_csv(csv: &str) -> Vec<Ap> {
         let essid = if essid.is_empty() { "(隐藏)".into() } else { essid };
         aps.push(Ap { bssid, channel, power, essid });
     }
-    aps.sort_by_key(|a| std::cmp::Reverse(a.power));
+    // power==0 means "driver didn't report RSSI" — sort those last
+    aps.sort_by_key(|a| std::cmp::Reverse(if a.power == 0 { -999 } else { a.power }));
     aps
 }
 
